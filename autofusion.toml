@@ -1,0 +1,36 @@
+# autoFusion configuration.
+# Models are the building blocks; the registry records the litellm model id,
+# optional api_base, and per-token cost (0 for local = free, skips budget checks).
+# API keys are read from the environment / .env — NEVER stored here.
+
+[[models]]
+name = "llama3.2"
+model = "ollama/llama3.2"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+[[models]]
+name = "qwen2.5"
+model = "ollama/qwen2.5:3b"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+# Example hosted model (uncomment + add OPENAI_API_KEY to .env to use):
+# [[models]]
+# name = "gpt-4o-mini"
+# model = "gpt-4o-mini"
+
+# --- Forward-looking config (used in later phases) ---
+
+[fusion]
+# Phase 2: proposers each draft, aggregator synthesizes.
+proposers = ["llama3.2", "qwen2.5"]
+aggregator = "llama3.2"
+layers = 1
+
+[budget]
+# Phase 4: hard caps enforced before calls fire. null = unlimited.
+per_request_usd = 0.50
+total_usd = 10.0

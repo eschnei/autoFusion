@@ -1,0 +1,21 @@
+.DS_Store
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Secrets — never commit provider keys
+.env
+.env.local
+
+# Eval outputs
+results/
+.cache/
+*.log
