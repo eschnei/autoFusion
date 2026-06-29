@@ -68,7 +68,11 @@ class HumanEval:
                         {"role": "system", "content": self._SYSTEM},
                         {"role": "user", "content": row["prompt"]},
                     ],
-                    meta={"test": row["test"], "entry_point": row["entry_point"]},
+                    meta={
+                        "test": row["test"],
+                        "entry_point": row["entry_point"],
+                        "prompt": row["prompt"],
+                    },
                 )
             )
         return tasks
@@ -78,7 +82,14 @@ class HumanEval:
         entry = task.meta["entry_point"]
         if f"def {entry}" not in code:
             return ScoreResult(False, f"failed: no `def {entry}` in output")
-        program = "\n".join([code, "", task.meta["test"], "", f"check({entry})", ""])
+        # HumanEval prompts declare imports (e.g. `from typing import List`) ABOVE
+        # the signature. Chat models often omit them, so prepend the prompt's
+        # preamble (everything before the function def) to the program. Otherwise
+        # we'd penalize correct code for a missing import the task already supplied.
+        prompt = task.meta.get("prompt", "")
+        idx = prompt.find(f"def {entry}")
+        preamble = prompt[:idx] if idx != -1 else ""
+        program = "\n".join([preamble, code, "", task.meta["test"], "", f"check({entry})", ""])
         result = run_python(program, timeout=10.0)
         return ScoreResult(result.passed, result.detail)
 

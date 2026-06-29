@@ -29,6 +29,7 @@ class CompletionResult:
     prompt_tokens: int
     completion_tokens: int
     error: str | None = None
+    n_calls: int = 1  # model calls behind this result (fusion = proposers + aggregator)
 
     @property
     def ok(self) -> bool:

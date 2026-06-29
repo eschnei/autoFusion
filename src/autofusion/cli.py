@@ -3,7 +3,8 @@
 Commands:
   config-check          show configured models + which provider keys are present
   smoke   --model M     call one model end-to-end (Phase 0 gate)
-  eval    --models a,b  run a benchmark baseline -> leaderboard (Phase 1 gate)
+  fuse    "prompt"      run fusion (MoA) on one prompt (Phase 2)
+  eval    --models a,b  run a benchmark baseline / fusion -> leaderboard (Phase 1/2)
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import sys
 
 from .config import load_config
 from .providers import complete
+from .strategies import resolve_strategy
 
 
 def _cmd_config_check(args) -> int:
@@ -54,6 +56,21 @@ def _cmd_smoke(args) -> int:
     return 0
 
 
+def _cmd_fuse(args) -> int:
+    cfg = load_config(args.config)
+    strategy = resolve_strategy(cfg, "fusion")
+    props = ", ".join(p.name for p in strategy.proposers)
+    print(f"-> fusion | proposers: {props} | aggregator: {strategy.aggregator.name} "
+          f"| layers: {strategy.layers}\n")
+    result = asyncio.run(strategy.run([{"role": "user", "content": args.prompt}]))
+    if not result.ok:
+        print(f"ERROR: {result.error}", file=sys.stderr)
+        return 1
+    print(result.text)
+    print(f"\n[{result.latency_s:.2f}s | {result.n_calls} calls | ${result.cost_usd:.6f}]")
+    return 0
+
+
 def _cmd_eval(args) -> int:
     from .eval.results import render_leaderboard, save_run
     from .eval.runner import run_baseline
@@ -81,14 +98,23 @@ def main(argv: list[str] | None = None) -> int:
     p_smoke.add_argument("-m", "--model", required=True, help="model name from config")
     p_smoke.add_argument("-p", "--prompt", default="In one sentence, what is a mixture-of-agents?")
 
-    p_eval = sub.add_parser("eval", help="run a benchmark baseline")
-    p_eval.add_argument("-m", "--models", required=True, help="comma-separated model names")
+    p_fuse = sub.add_parser("fuse", help="run fusion (MoA) on one prompt")
+    p_fuse.add_argument("prompt", help="the prompt to fuse")
+
+    p_eval = sub.add_parser("eval", help="run a benchmark baseline or fusion")
+    p_eval.add_argument(
+        "-m", "--models", required=True,
+        help="comma-separated strategy names (configured models and/or 'fusion')",
+    )
     p_eval.add_argument("-b", "--benchmark", default="humaneval")
     p_eval.add_argument("-n", "--limit", type=int, default=None, help="limit number of tasks")
     p_eval.add_argument("--concurrency", type=int, default=4)
 
     args = parser.parse_args(argv)
-    handlers = {"config-check": _cmd_config_check, "smoke": _cmd_smoke, "eval": _cmd_eval}
+    handlers = {
+        "config-check": _cmd_config_check, "smoke": _cmd_smoke,
+        "fuse": _cmd_fuse, "eval": _cmd_eval,
+    }
     return handlers[args.command](args)
 
 

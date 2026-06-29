@@ -16,6 +16,7 @@ class TaskOutcome:
     detail: str
     cost_usd: float
     latency_s: float
+    n_calls: int = 1
     error: str | None = None
 
 
@@ -34,11 +35,16 @@ class ModelRunResult:
     n_errors: int
     total_cost_usd: float
     avg_latency_s: float
+    total_calls: int = 0
     outcomes: list[TaskOutcome] = field(default_factory=list)
 
     @property
     def pass_at_1(self) -> float:
         return self.n_passed / self.n_tasks if self.n_tasks else 0.0
+
+    @property
+    def avg_calls(self) -> float:
+        return self.total_calls / self.n_tasks if self.n_tasks else 0.0
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
@@ -73,6 +79,7 @@ def save_run(results: list[ModelRunResult], out_dir: str | Path = "results") -> 
             "n_tasks": r.n_tasks,
             "n_errors": r.n_errors,
             "total_cost_usd": round(r.total_cost_usd, 6),
+            "avg_calls": round(r.avg_calls, 2),
             "avg_latency_s": round(r.avg_latency_s, 3),
         }
         for r in results
@@ -85,11 +92,14 @@ def save_run(results: list[ModelRunResult], out_dir: str | Path = "results") -> 
 def render_leaderboard(results: list[ModelRunResult]) -> str:
     """ASCII leaderboard, ranked by pass@1, annotated with cost + latency."""
     ranked = sorted(results, key=lambda r: r.pass_at_1, reverse=True)
-    header = f"{'model':<22}{'pass@1':>9}{'passed':>9}{'errors':>8}{'cost($)':>11}{'avg lat(s)':>12}"
+    header = (
+        f"{'model':<22}{'pass@1':>9}{'passed':>9}{'errors':>8}"
+        f"{'cost($)':>11}{'calls/q':>9}{'avg lat(s)':>12}"
+    )
     lines = [header, "-" * len(header)]
     for r in ranked:
         lines.append(
             f"{r.model:<22}{r.pass_at_1:>8.1%}{r.n_passed:>4}/{r.n_tasks:<4}"
-            f"{r.n_errors:>8}{r.total_cost_usd:>11.4f}{r.avg_latency_s:>12.2f}"
+            f"{r.n_errors:>8}{r.total_cost_usd:>11.4f}{r.avg_calls:>9.1f}{r.avg_latency_s:>12.2f}"
         )
     return "\n".join(lines)
