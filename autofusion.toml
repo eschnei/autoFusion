@@ -17,6 +17,13 @@ api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
 
+[[models]]
+name = "qwen2.5-coder"
+model = "ollama/qwen2.5-coder:7b"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
 # Example hosted model (uncomment + add OPENAI_API_KEY to .env to use):
 # [[models]]
 # name = "gpt-4o-mini"

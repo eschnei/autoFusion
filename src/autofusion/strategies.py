@@ -63,6 +63,9 @@ class Fusion:
     aggregator: ModelSpec
     layers: int = 1
     name: str = "fusion"
+    # Sampling temperature for proposers. None inherits the call's temperature.
+    # Set > 0 to get diverse drafts — required for Self-MoA (same model repeated).
+    proposer_temperature: float | None = None
 
     async def run(self, messages: list[Message], **kw) -> CompletionResult:
         start = time.perf_counter()
@@ -70,13 +73,17 @@ class Fusion:
         n_calls = 0
         candidates: list[str] = []
 
+        prop_kw = dict(kw)
+        if self.proposer_temperature is not None:
+            prop_kw["temperature"] = self.proposer_temperature
+
         for layer in range(self.layers):
             # Layer 0 proposers see the raw task; later layers see prior drafts.
             layer_messages = (
                 messages if layer == 0 else build_aggregate_messages(messages, candidates)
             )
             results = await asyncio.gather(
-                *(acomplete(p, layer_messages, **kw) for p in self.proposers)
+                *(acomplete(p, layer_messages, **prop_kw) for p in self.proposers)
             )
             total_cost += sum(r.cost_usd for r in results)
             n_calls += len(results)
