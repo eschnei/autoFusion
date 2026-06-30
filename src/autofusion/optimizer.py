@@ -55,6 +55,9 @@ def candidate_recipes(config: Config, available: list[str]) -> list[str]:
         t in avail or t in ("fusion", "route") for t in c.tiers
     ):
         recipes.append("cascade")
+    b = config.bestofn
+    if b.models and avail.issuperset(b.models) and (b.critic is None or b.critic in avail):
+        recipes.append("bestofn")
     return recipes
 
 

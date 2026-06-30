@@ -64,6 +64,17 @@ autofusion optimize -b livecodebench -n 50
 
 "Available" = callable right now = **local Ollama + any model whose API key is present**. Add a key and the pool (and the frontier) grows. The frontier (★) is the set of recipes where you can't get more quality without paying more — everything behind it is strictly wasteful. It tells you, per job, *which* combination of models to fuse (or whether to fuse at all): on an easy job the cheap model may dominate and fusion is off the frontier; on a hard one a diverse fused recipe may push the frontier past any single model. You don't assert which recipe is best — you measure it.
 
+## The cheap path to high quality: verified best-of-N
+
+On **verifiable** tasks (code, math) you often don't need a frontier model at all. Sample N candidates from a basket of cheap/diverse models and let the **verifier** (the tests) pick the winner — pass@k climbs fast with samples, and the verifier collapses them back to one *correct* answer with no model-judgment in the loop:
+
+```bash
+autofusion eval -m bestofn -b humaneval      # in eval, the real test scorer is the verifier
+autofusion bestofn "your prompt"             # ad-hoc: no tests, a critic model picks instead
+```
+
+Configured in `[bestofn]` (`models` basket, `n`, `critic`, `temperature`). In one local run, best-of-4 over three small models hit **100%** where the best single small model managed **75%** — $0, no frontier call. For non-verifiable tasks a `critic` model picks the best candidate (its ceiling is the critic's own quality, so there one strong model helps).
+
 ## Cutting cost: the cascade
 
 Fusion raises the quality *ceiling* but costs N× calls. The **cascade** does the opposite — it holds quality and drops *cost*: try the **cheapest** model first, have a cheap **critic** score the answer, and **escalate** to a stronger tier (or to `fusion`) only when confidence is low. Most requests resolve at the cheap tier, so you pay frontier prices only on the hard tail (the idea behind Cognition's "frontier quality at ~35% lower cost").

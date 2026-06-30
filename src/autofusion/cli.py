@@ -7,6 +7,7 @@ Commands:
   fuse    "prompt"      run fusion (MoA) on one prompt (Phase 2)
   route   "prompt"      run the router (picks one model) on one prompt (Phase 6)
   cascade "prompt"      cheap->critic->escalate cost cascade on one prompt (Phase 7)
+  bestofn "prompt"      sample N candidates, a verifier/critic picks the best (Phase 9)
   eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
   optimize --benchmark  sweep recipes over available models -> quality×cost frontier
   budget  status        show the configured budget caps
@@ -176,6 +177,29 @@ def _cmd_cascade(args) -> int:
     return 0
 
 
+def _cmd_bestofn(args) -> int:
+    cfg = load_config(args.config)
+    strategy = resolve_strategy(cfg, "bestofn")
+    budget = BudgetTracker.from_config(cfg.budget)
+    basket = ", ".join(m.name for m in strategy.models)
+    critic = strategy.critic.name if strategy.critic else "none"
+    print(f"-> best-of-{strategy.n} | basket: {basket} | critic: {critic} "
+          f"(ad-hoc: no test verifier, critic picks)\n")
+    try:
+        result = asyncio.run(
+            strategy.run([{"role": "user", "content": args.prompt}], budget=budget)
+        )
+    except BudgetExceeded as exc:
+        print(f"budget cap hit: {exc}", file=sys.stderr)
+        return 2
+    if not result.ok:
+        print(f"ERROR: {result.error}", file=sys.stderr)
+        return 1
+    print(result.text)
+    print(f"\n[{result.latency_s:.2f}s | {result.n_calls} calls | ${result.cost_usd:.6f}]")
+    return 0
+
+
 def _cmd_optimize(args) -> int:
     from .eval.runner import run_baseline
     from .optimizer import (
@@ -249,6 +273,9 @@ def main(argv: list[str] | None = None) -> int:
     p_cascade = sub.add_parser("cascade", help="cheap->critic->escalate cost cascade")
     p_cascade.add_argument("prompt", help="the prompt to run through the cascade")
 
+    p_bestofn = sub.add_parser("bestofn", help="sample N candidates, pick the best")
+    p_bestofn.add_argument("prompt", help="the prompt to sample")
+
     p_budget = sub.add_parser("budget", help="budget caps")
     p_budget.add_argument("action", choices=["status"], help="what to show")
 
@@ -275,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
-        "eval": _cmd_eval, "optimize": _cmd_optimize,
+        "bestofn": _cmd_bestofn, "eval": _cmd_eval, "optimize": _cmd_optimize,
         "budget": _cmd_budget, "serve": _cmd_serve,
     }
     try:

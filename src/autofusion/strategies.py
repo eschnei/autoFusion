@@ -221,6 +221,69 @@ class Cascade:
         )
 
 
+@dataclass
+class VerifiedBestOfN:
+    """Sample N candidates from a basket of models, then let a VERIFIER pick the
+    winner — the cheap path to high quality on verifiable tasks (no frontier
+    judge needed). The runner passes a real `verify(text)` (the benchmark scorer)
+    because `needs_verifier` is set. With no verifier, a `critic` model picks;
+    failing that, the first candidate."""
+
+    models: list[ModelSpec]
+    n: int = 4
+    critic: ModelSpec | None = None
+    temperature: float = 0.7
+    name: str = "bestofn"
+    needs_verifier: bool = True  # signals the runner to pass a verify() closure
+
+    async def run(
+        self, messages: list[Message], budget: BudgetTracker | None = None,
+        verify=None, **kw,
+    ) -> CompletionResult:
+        start = time.perf_counter()
+        kw.pop("temperature", None)  # we set sampling temperature ourselves
+        # Generate N candidates, cycling the basket for cross-model diversity.
+        gens = [
+            _guarded_acomplete(self.models[i % len(self.models)], messages, budget,
+                               temperature=self.temperature, **kw)
+            for i in range(self.n)
+        ]
+        results = await asyncio.gather(*gens)
+        total_cost = sum(r.cost_usd for r in results)
+        n_calls = len(results)
+        oks = [r for r in results if r.ok]
+
+        def finish(chosen: CompletionResult | None, error: str | None = None) -> CompletionResult:
+            return CompletionResult(
+                model=self.name, text=chosen.text if chosen else "", cost_usd=total_cost,
+                latency_s=time.perf_counter() - start,
+                prompt_tokens=chosen.prompt_tokens if chosen else 0,
+                completion_tokens=chosen.completion_tokens if chosen else 0,
+                error=error, n_calls=n_calls,
+            )
+
+        if not oks:
+            return finish(None, error="all candidates failed")
+
+        if verify is not None:
+            for r in oks:
+                if await asyncio.to_thread(verify, r.text):
+                    return finish(r)  # first verified-correct candidate wins
+            # none verified -> fall through to critic / first (honest: likely wrong)
+
+        if self.critic is not None:
+            best, best_score = oks[0], -1.0
+            for r in oks:
+                score, crit = await _critic_score(self.critic, messages, r.text, budget)
+                total_cost += crit.cost_usd
+                n_calls += crit.n_calls
+                if (score or 0.0) > best_score:
+                    best, best_score = r, (score or 0.0)
+            return finish(best)
+
+        return finish(oks[0])
+
+
 def resolve_strategy(config: Config, name: str):
     """Map a CLI name to a Strategy. A configured model -> SingleModel;
     "fusion" -> Fusion from [fusion]; "route" -> Router from [router]."""
@@ -254,5 +317,15 @@ def resolve_strategy(config: Config, name: str):
             critic=config.model(c.critic),
             threshold=c.threshold,
         )
-    known = ", ".join(sorted(config.models)) + ", fusion, route, cascade"
+    if name == "bestofn":
+        b = config.bestofn
+        if not b.models:
+            raise ValueError("[bestofn] config needs at least one model")
+        return VerifiedBestOfN(
+            models=[config.model(m) for m in b.models],
+            n=b.n,
+            critic=config.model(b.critic) if b.critic else None,
+            temperature=b.temperature,
+        )
+    known = ", ".join(sorted(config.models)) + ", fusion, route, cascade, bestofn"
     raise KeyError(f"unknown strategy '{name}'. Available: {known}")

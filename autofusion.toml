@@ -53,6 +53,14 @@ tiers = ["llama3.2", "qwen2.5-coder"]
 critic = "llama3.2"
 threshold = 0.7
 
+[bestofn]
+# Phase 9: sample N candidates across the basket; a verifier (in eval) or the
+# critic (ad-hoc) picks the winner. The cheap path to high quality on verifiable tasks.
+models = ["llama3.2", "qwen2.5", "qwen2.5-coder"]
+n = 4
+critic = "llama3.2"
+temperature = 0.7
+
 [budget]
 # Phase 4: hard caps enforced before calls fire. null = unlimited.
 per_request_usd = 0.50

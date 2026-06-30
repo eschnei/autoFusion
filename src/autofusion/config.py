@@ -59,6 +59,13 @@ tiers = ["llama3.2", "qwen2.5"]
 critic = "llama3.2"
 threshold = 0.7
 
+[bestofn]
+# Sample N candidates across the basket; a verifier (eval) or critic (ad-hoc) picks.
+models = ["llama3.2", "qwen2.5"]
+n = 4
+critic = "llama3.2"
+temperature = 0.7
+
 [budget]
 # Hard caps enforced before calls fire. null = unlimited.
 per_request_usd = 0.50
@@ -114,12 +121,23 @@ class CascadeConfig:
 
 
 @dataclass
+class BestOfNConfig:
+    """Sample N candidates from `models`; a verifier (or `critic`) picks one."""
+
+    models: list[str] = field(default_factory=list)
+    n: int = 4
+    critic: str | None = None
+    temperature: float = 0.7
+
+
+@dataclass
 class Config:
     models: dict[str, ModelSpec]
     fusion: FusionConfig
     budget: BudgetConfig
     router: RouterConfig = field(default_factory=RouterConfig)
     cascade: CascadeConfig = field(default_factory=CascadeConfig)
+    bestofn: BestOfNConfig = field(default_factory=BestOfNConfig)
     path: Path | None = None
 
     def model(self, name: str) -> ModelSpec:
@@ -193,7 +211,14 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
         critic=c.get("critic"),
         threshold=float(c.get("threshold", 0.7)),
     )
+    bo = raw.get("bestofn", {})
+    bestofn = BestOfNConfig(
+        models=list(bo.get("models", [])),
+        n=int(bo.get("n", 4)),
+        critic=bo.get("critic"),
+        temperature=float(bo.get("temperature", 0.7)),
+    )
     return Config(
         models=models, fusion=fusion, budget=budget,
-        router=router, cascade=cascade, path=path,
+        router=router, cascade=cascade, bestofn=bestofn, path=path,
     )
