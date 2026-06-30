@@ -54,6 +54,19 @@ autofusion -c configs/local-plus-frontier.toml fuse "your prompt"
 
 See [`configs/local-plus-frontier.toml`](configs/local-plus-frontier.toml). If the aggregator's key is missing, `config-check` flags it (`MISSING OPENAI_API_KEY`) rather than crashing, and the tight `[budget]` cap is your safety net since only the aggregator spends.
 
+## Cutting cost: the cascade
+
+Fusion raises the quality *ceiling* but costs N× calls. The **cascade** does the opposite — it holds quality and drops *cost*: try the **cheapest** model first, have a cheap **critic** score the answer, and **escalate** to a stronger tier (or to `fusion`) only when confidence is low. Most requests resolve at the cheap tier, so you pay frontier prices only on the hard tail (the idea behind Cognition's "frontier quality at ~35% lower cost").
+
+```bash
+autofusion cascade "your prompt"            # cheap -> critic -> escalate
+autofusion eval -m cheap,frontier,cascade,fusion -n 50   # see the cost/quality frontier
+```
+
+Configured in `[cascade]` (`tiers` cheapest-first, a `critic` model, a `threshold`). A tier can be a model, `fusion`, or `route`.
+
+**Honest caveat:** the critic is an LLM-judge, so it can be biased. We blunt that three ways: use a *cheap, separate* model as critic; **fail-safe to escalation** when the critic is unsure or unparseable (never silently trust a bad answer); and **measure final quality deterministically** with `eval` — so you can confirm the cascade actually held quality while cutting cost, rather than taking it on faith. Tune `threshold` from the eval, not by guessing.
+
 ## Benchmarking against frontier models
 
 The thesis is "fusion can beat the best single frontier model." Test it with the same `eval` instrument — fusion is scored like any model:

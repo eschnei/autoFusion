@@ -44,6 +44,12 @@ default = "llama3.2"
 match = "code|function|algorithm|def |class |array|sort|implement"
 model = "qwen2.5-coder"
 
+[cascade]
+# Phase 7: cheapest-first; critic scores each answer, escalate if below threshold.
+tiers = ["llama3.2", "qwen2.5-coder"]
+critic = "llama3.2"
+threshold = 0.7
+
 [budget]
 # Phase 4: hard caps enforced before calls fire. null = unlimited.
 per_request_usd = 0.50
