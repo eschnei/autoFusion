@@ -327,6 +327,12 @@ def main(argv: list[str] | None = None) -> int:
     }
     try:
         return handlers[args.command](args)
+    except BudgetExceeded as exc:
+        # Money tool: a cap hit during eval/optimize/report stops cleanly, not
+        # with a stack trace. Partial results are dropped — lower -n or raise the cap.
+        print(f"budget cap reached: {exc}\n"
+              f"(lower -n, or raise [budget].total_usd in your config)", file=sys.stderr)
+        return 2
     except (KeyError, ValueError, FileNotFoundError) as exc:
         # Friendly one-liner instead of a traceback (unknown model/strategy lists
         # valid options; missing/!parseable config; bad fusion config).
