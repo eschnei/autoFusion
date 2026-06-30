@@ -17,8 +17,13 @@ from .results import ModelRunResult, TaskOutcome
 
 
 async def _run_one(strategy, task: Task, benchmark, sem: asyncio.Semaphore, budget) -> TaskOutcome:
+    # Strategies that select among candidates (best-of-N) get the real verifier:
+    # the benchmark's own scorer for this task. Others never see it.
+    extra = {}
+    if getattr(strategy, "needs_verifier", False):
+        extra["verify"] = lambda text, _t=task: benchmark.score(_t, text).passed
     async with sem:
-        completion = await strategy.run(task.messages, budget=budget, temperature=0.0)
+        completion = await strategy.run(task.messages, budget=budget, temperature=0.0, **extra)
     if not completion.ok:
         return TaskOutcome(
             task_id=task.task_id, model=strategy.name, passed=False,
