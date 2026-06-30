@@ -2,6 +2,7 @@
 
 Commands:
   config-check          show configured models + which provider keys are present
+  registry              show each model's capabilities + cost ($/Mtok) + context
   smoke   --model M     call one model end-to-end (Phase 0 gate)
   fuse    "prompt"      run fusion (MoA) on one prompt (Phase 2)
   route   "prompt"      run the router (picks one model) on one prompt (Phase 6)
@@ -47,6 +48,22 @@ def _cmd_config_check(args) -> int:
     cfg = load_config(args.config)
     print(f"config: {cfg.path}\n")
     _print_model_table(cfg)
+    return 0
+
+
+def _cmd_registry(args) -> int:
+    from .registry import build_registry
+
+    cfg = load_config(args.config)
+    reg = build_registry(cfg)
+    print(f"{'model':<16}{'local':>6}{'$/Mtok in':>11}{'$/Mtok out':>12}"
+          f"{'context':>10}  capabilities")
+    print("-" * 78)
+    for p in reg.values():
+        ctx = f"{p.context_window:,}" if p.context_window else "?"
+        caps = ", ".join(p.capabilities) or "—"
+        print(f"{p.name:<16}{'yes' if p.is_local else 'no':>6}"
+              f"{p.input_cost_per_mtok:>11.2f}{p.output_cost_per_mtok:>12.2f}{ctx:>10}  {caps}")
     return 0
 
 
@@ -194,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument("-f", "--force", action="store_true", help="overwrite an existing config")
 
     sub.add_parser("config-check", help="show configured models + key status")
+    sub.add_parser("registry", help="show capabilities + cost per model")
 
     p_smoke = sub.add_parser("smoke", help="call one model end-to-end")
     p_smoke.add_argument("-m", "--model", required=True, help="model name from config")
@@ -226,7 +244,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     handlers = {
-        "init": _cmd_init, "config-check": _cmd_config_check, "smoke": _cmd_smoke,
+        "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
+        "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
         "eval": _cmd_eval, "budget": _cmd_budget, "serve": _cmd_serve,
     }
