@@ -9,6 +9,7 @@ model = "ollama/llama3.2"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["general", "chat"]
 
 [[models]]
 name = "qwen2.5"
@@ -16,6 +17,7 @@ model = "ollama/qwen2.5:3b"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["general", "reasoning"]
 
 [[models]]
 name = "qwen2.5-coder"
@@ -23,6 +25,7 @@ model = "ollama/qwen2.5-coder:7b"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["code", "reasoning"]
 
 # Example hosted model (uncomment + add OPENAI_API_KEY to .env to use):
 # [[models]]

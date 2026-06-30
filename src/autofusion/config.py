@@ -26,6 +26,7 @@ model = "ollama/llama3.2"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["general", "chat"]
 
 [[models]]
 name = "qwen2.5"
@@ -33,6 +34,7 @@ model = "ollama/qwen2.5:3b"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["general", "reasoning"]
 
 # Example hosted model (uncomment + add OPENAI_API_KEY to .env to use):
 # [[models]]
@@ -73,6 +75,7 @@ class ModelSpec:
     api_base: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    capabilities: tuple[str, ...] = ()  # what it's best at: "code", "reasoning", ...
     extra: dict = field(default_factory=dict)  # passthrough litellm params
 
     @property
@@ -153,13 +156,15 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
 
     models: dict[str, ModelSpec] = {}
     for entry in raw.get("models", []):
-        known = {"name", "model", "api_base", "input_cost_per_token", "output_cost_per_token"}
+        known = {"name", "model", "api_base", "input_cost_per_token",
+                 "output_cost_per_token", "capabilities"}
         spec = ModelSpec(
             name=entry["name"],
             model=entry["model"],
             api_base=entry.get("api_base"),
             input_cost_per_token=entry.get("input_cost_per_token"),
             output_cost_per_token=entry.get("output_cost_per_token"),
+            capabilities=tuple(entry.get("capabilities", [])),
             extra={k: v for k, v in entry.items() if k not in known},
         )
         if spec.name in models:
