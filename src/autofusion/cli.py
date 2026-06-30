@@ -5,7 +5,8 @@ Commands:
   smoke   --model M     call one model end-to-end (Phase 0 gate)
   fuse    "prompt"      run fusion (MoA) on one prompt (Phase 2)
   route   "prompt"      run the router (picks one model) on one prompt (Phase 6)
-  eval    --models a,b  run a benchmark baseline / fusion / route -> leaderboard
+  cascade "prompt"      cheap->critic->escalate cost cascade on one prompt (Phase 7)
+  eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
   budget  status        show the configured budget caps
 """
 
@@ -135,6 +136,28 @@ def _cmd_route(args) -> int:
     return 0
 
 
+def _cmd_cascade(args) -> int:
+    cfg = load_config(args.config)
+    strategy = resolve_strategy(cfg, "cascade")
+    budget = BudgetTracker.from_config(cfg.budget)
+    tiers = ", ".join(t.name for t in strategy.tiers)
+    print(f"-> cascade | tiers: {tiers} | critic: {strategy.critic.name} "
+          f"| threshold: {strategy.threshold}\n")
+    try:
+        result = asyncio.run(
+            strategy.run([{"role": "user", "content": args.prompt}], budget=budget)
+        )
+    except BudgetExceeded as exc:
+        print(f"budget cap hit: {exc}", file=sys.stderr)
+        return 2
+    if not result.ok:
+        print(f"ERROR: {result.error}", file=sys.stderr)
+        return 1
+    print(result.text)
+    print(f"\n[{result.latency_s:.2f}s | {result.n_calls} calls | ${result.cost_usd:.6f}]")
+    return 0
+
+
 def _cmd_serve(args) -> int:
     import uvicorn
 
@@ -182,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     p_route = sub.add_parser("route", help="route one prompt to a single model")
     p_route.add_argument("prompt", help="the prompt to route")
 
+    p_cascade = sub.add_parser("cascade", help="cheap->critic->escalate cost cascade")
+    p_cascade.add_argument("prompt", help="the prompt to run through the cascade")
+
     p_budget = sub.add_parser("budget", help="budget caps")
     p_budget.add_argument("action", choices=["status"], help="what to show")
 
@@ -201,8 +227,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handlers = {
         "init": _cmd_init, "config-check": _cmd_config_check, "smoke": _cmd_smoke,
-        "fuse": _cmd_fuse, "route": _cmd_route, "eval": _cmd_eval,
-        "budget": _cmd_budget, "serve": _cmd_serve,
+        "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
+        "eval": _cmd_eval, "budget": _cmd_budget, "serve": _cmd_serve,
     }
     try:
         return handlers[args.command](args)

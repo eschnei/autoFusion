@@ -151,6 +151,76 @@ class Router:
         return await _guarded_acomplete(self.select(messages), messages, budget, **kw)
 
 
+_CRITIC_SYSTEM = (
+    "You are a strict grader. Given a TASK and a CANDIDATE ANSWER, estimate the "
+    "probability the answer is correct and complete. Respond with ONLY a single "
+    "number between 0 and 1 (e.g. 0.85) — no words."
+)
+
+
+async def _critic_score(
+    critic: ModelSpec, messages: list[Message], answer: str, budget: BudgetTracker | None, **kw
+) -> tuple[float | None, CompletionResult]:
+    """Cheap critic rates a candidate 0..1. Returns (score|None, its result).
+    None = unparseable/failed → caller should fail-safe to escalation."""
+    task_text = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user")
+    critic_messages = [
+        {"role": "system", "content": _CRITIC_SYSTEM},
+        {"role": "user", "content": f"TASK:\n{task_text}\n\nCANDIDATE ANSWER:\n{answer}\n\nProbability correct (0-1):"},
+    ]
+    result = await _guarded_acomplete(critic, critic_messages, budget, temperature=0.0)
+    if not result.ok:
+        return None, result
+    match = re.search(r"\d*\.?\d+", result.text)
+    if not match:
+        return None, result
+    return max(0.0, min(1.0, float(match.group()))), result
+
+
+@dataclass
+class Cascade:
+    """Cost cascade: run `tiers` cheapest-first; after each non-final tier a
+    `critic` scores the answer and we stop early if confident, else escalate.
+    Most requests resolve at the cheap tier, so the pricey tiers (and fusion)
+    are paid for only on the hard tail."""
+
+    tiers: list  # Strategy objects, cheapest -> most expensive
+    critic: ModelSpec
+    threshold: float = 0.7
+    name: str = "cascade"
+
+    async def run(
+        self, messages: list[Message], budget: BudgetTracker | None = None, **kw
+    ) -> CompletionResult:
+        start = time.perf_counter()
+        total_cost = 0.0
+        n_calls = 0
+        last: CompletionResult | None = None
+
+        for i, tier in enumerate(self.tiers):
+            result = await tier.run(messages, budget=budget, **kw)
+            total_cost += result.cost_usd
+            n_calls += result.n_calls
+            last = result
+            if i == len(self.tiers) - 1:
+                break  # final tier — return whatever it gave
+            if not result.ok:
+                continue  # tier errored — escalate
+            score, crit = await _critic_score(self.critic, messages, result.text, budget, **kw)
+            total_cost += crit.cost_usd
+            n_calls += crit.n_calls
+            if score is not None and score >= self.threshold:
+                break  # confident enough — stop here, don't pay for higher tiers
+            # else: low confidence or unparseable critic -> escalate (fail-safe)
+
+        return CompletionResult(
+            model=self.name, text=last.text, cost_usd=total_cost,
+            latency_s=time.perf_counter() - start,
+            prompt_tokens=last.prompt_tokens, completion_tokens=last.completion_tokens,
+            error=last.error, n_calls=n_calls,
+        )
+
+
 def resolve_strategy(config: Config, name: str):
     """Map a CLI name to a Strategy. A configured model -> SingleModel;
     "fusion" -> Fusion from [fusion]; "route" -> Router from [router]."""
@@ -173,5 +243,16 @@ def resolve_strategy(config: Config, name: str):
             default=config.model(r.default),
             rules=[(re.compile(p, re.IGNORECASE), config.model(m)) for p, m in r.rules],
         )
-    known = ", ".join(sorted(config.models)) + ", fusion, route"
+    if name == "cascade":
+        c = config.cascade
+        if len(c.tiers) < 2 or not c.critic:
+            raise ValueError("[cascade] config needs >=2 tiers and a critic model")
+        if "cascade" in c.tiers:
+            raise ValueError("[cascade] tiers cannot include 'cascade'")
+        return Cascade(
+            tiers=[resolve_strategy(config, t) for t in c.tiers],
+            critic=config.model(c.critic),
+            threshold=c.threshold,
+        )
+    known = ", ".join(sorted(config.models)) + ", fusion, route, cascade"
     raise KeyError(f"unknown strategy '{name}'. Available: {known}")

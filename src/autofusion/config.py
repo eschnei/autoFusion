@@ -51,6 +51,12 @@ default = "llama3.2"
 match = "code|function|algorithm|def |class |array|sort|implement"
 model = "qwen2.5"
 
+[cascade]
+# Cheapest-first; a critic scores each answer and escalates below `threshold`.
+tiers = ["llama3.2", "qwen2.5"]
+critic = "llama3.2"
+threshold = 0.7
+
 [budget]
 # Hard caps enforced before calls fire. null = unlimited.
 per_request_usd = 0.50
@@ -96,11 +102,21 @@ class RouterConfig:
 
 
 @dataclass
+class CascadeConfig:
+    """Cost cascade: try `tiers` cheapest-first, a `critic` gates escalation."""
+
+    tiers: list[str] = field(default_factory=list)  # strategy names, cheapest -> priciest
+    critic: str | None = None
+    threshold: float = 0.7
+
+
+@dataclass
 class Config:
     models: dict[str, ModelSpec]
     fusion: FusionConfig
     budget: BudgetConfig
     router: RouterConfig = field(default_factory=RouterConfig)
+    cascade: CascadeConfig = field(default_factory=CascadeConfig)
     path: Path | None = None
 
     def model(self, name: str) -> ModelSpec:
@@ -166,4 +182,13 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
         default=r.get("default"),
         rules=[(rule["match"], rule["model"]) for rule in r.get("rules", [])],
     )
-    return Config(models=models, fusion=fusion, budget=budget, router=router, path=path)
+    c = raw.get("cascade", {})
+    cascade = CascadeConfig(
+        tiers=list(c.get("tiers", [])),
+        critic=c.get("critic"),
+        threshold=float(c.get("threshold", 0.7)),
+    )
+    return Config(
+        models=models, fusion=fusion, budget=budget,
+        router=router, cascade=cascade, path=path,
+    )
