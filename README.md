@@ -39,6 +39,17 @@ uv run autofusion eval -m llama3.2 -n 20    # baseline a model on 20 HumanEval t
 
 Edit [`autofusion.toml`](autofusion.toml) to register models (litellm id, optional `api_base`, per-token cost; `0` = free/local).
 
+### Local proposers + frontier aggregator (the cost sweet spot)
+
+Phase 3 found fusion's gains hinge on a **strong aggregator**, not on the proposers. So the highest-value config drafts with cheap **local** Ollama models and synthesizes with **one hosted frontier model** — you pay for exactly **one** strong call per request while the N proposer drafts cost nothing:
+
+```bash
+# needs only OPENAI_API_KEY in .env — proposers are local
+autofusion -c configs/local-plus-frontier.toml fuse "your prompt"
+```
+
+See [`configs/local-plus-frontier.toml`](configs/local-plus-frontier.toml). If the aggregator's key is missing, `config-check` flags it (`MISSING OPENAI_API_KEY`) rather than crashing, and the tight `[budget]` cap is your safety net since only the aggregator spends.
+
 ## Security note
 
 HumanEval grading **executes model-generated code**. autoFusion runs each program in an isolated subprocess with a hard timeout, CPU/memory/file-size limits, and a reliability guard that neuters destructive syscalls (`src/autofusion/eval/sandbox.py`). This is adequate for benchmark models you control — **not** a boundary for adversarial code. For untrusted-at-scale use, run inside a locked-down container (no network, gVisor/seccomp).

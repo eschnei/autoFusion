@@ -1,0 +1,38 @@
+# local-proposers + frontier-aggregator profile.
+#
+# Cheap local Ollama models draft in parallel (free); ONE hosted frontier model
+# synthesizes the final answer. You pay for exactly one strong call per request
+# while the N proposer drafts cost nothing. Phase 3 showed fusion's gains hinge
+# on a strong aggregator — this puts the spend exactly there.
+#
+# Run: autofusion -c configs/local-plus-frontier.toml fuse "..."
+# Needs OPENAI_API_KEY in your .env (only the aggregator is hosted).
+
+[[models]]
+name = "llama3.2"
+model = "ollama/llama3.2"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+[[models]]
+name = "qwen2.5"
+model = "ollama/qwen2.5:3b"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+# The one paid model — the aggregator. Key read from OPENAI_API_KEY.
+[[models]]
+name = "gpt-4o-mini"
+model = "gpt-4o-mini"
+
+[fusion]
+proposers = ["llama3.2", "qwen2.5"]
+aggregator = "gpt-4o-mini"
+layers = 1
+
+[budget]
+# Only the aggregator costs money; keep a tight cap as a safety net.
+per_request_usd = 0.05
+total_usd = 5.0
