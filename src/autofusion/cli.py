@@ -114,6 +114,17 @@ def _cmd_fuse(args) -> int:
     return 0
 
 
+def _cmd_serve(args) -> int:
+    import uvicorn
+
+    from .server import create_app
+
+    cfg = load_config(args.config)
+    print(f"serving autoFusion on http://{args.host}:{args.port}  (POST /v1/chat/completions)")
+    uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def _cmd_eval(args) -> int:
     from .eval.results import render_leaderboard, save_run
     from .eval.runner import run_baseline
@@ -150,6 +161,10 @@ def main(argv: list[str] | None = None) -> int:
     p_budget = sub.add_parser("budget", help="budget caps")
     p_budget.add_argument("action", choices=["status"], help="what to show")
 
+    p_serve = sub.add_parser("serve", help="OpenAI-compatible HTTP endpoint")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8000)
+
     p_eval = sub.add_parser("eval", help="run a benchmark baseline or fusion")
     p_eval.add_argument(
         "-m", "--models", required=True,
@@ -162,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handlers = {
         "init": _cmd_init, "config-check": _cmd_config_check, "smoke": _cmd_smoke,
-        "fuse": _cmd_fuse, "eval": _cmd_eval, "budget": _cmd_budget,
+        "fuse": _cmd_fuse, "eval": _cmd_eval, "budget": _cmd_budget, "serve": _cmd_serve,
     }
     return handlers[args.command](args)
 

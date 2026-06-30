@@ -14,6 +14,8 @@ dependencies = [
     "datasets>=2.19",
     # Load provider API keys from a gitignored .env (never hardcoded).
     "python-dotenv>=1.0",
+    "fastapi>=0.138.2",
+    "uvicorn>=0.49.0",
 ]
 
 [project.scripts]
@@ -27,4 +29,7 @@ build-backend = "hatchling.build"
 packages = ["src/autofusion"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.0",
+]
