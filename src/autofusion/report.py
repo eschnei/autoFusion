@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .budget import BudgetTracker
 from .config import Config
 from .eval.runner import run_baseline
 from .optimizer import RecipeOutcome, available_model_names, candidate_recipes
@@ -36,10 +37,13 @@ async def run_report(
     available = available_model_names(config)
     recipes = candidate_recipes(config, available)
     model_names = set(config.models)
+    budget = BudgetTracker.from_config(config.budget)  # ONE cap across all benchmarks
 
     by_recipe: dict[str, dict[str, RecipeOutcome]] = {r: {} for r in recipes}
     for bname in benchmark_names:
-        results = await run_baseline(config, recipes, bname, limit=limit, concurrency=concurrency)
+        results = await run_baseline(
+            config, recipes, bname, limit=limit, concurrency=concurrency, budget=budget
+        )
         for res in results:
             by_recipe[res.model][bname] = RecipeOutcome.from_run(res)
 

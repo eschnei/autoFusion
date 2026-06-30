@@ -57,11 +57,14 @@ async def run_strategy(
 
 async def run_baseline(
     config: Config, names: list[str], benchmark_name: str,
-    limit: int | None = None, concurrency: int = 4,
+    limit: int | None = None, concurrency: int = 4, budget: BudgetTracker | None = None,
 ) -> list[ModelRunResult]:
     benchmark = get_benchmark(benchmark_name)
     tasks = benchmark.load(limit=limit)
-    budget = BudgetTracker.from_config(config.budget)  # shared cap across the whole run
+    # Reuse a caller-supplied tracker so a multi-benchmark report shares ONE cap;
+    # otherwise the cap would reset per benchmark.
+    if budget is None:
+        budget = BudgetTracker.from_config(config.budget)
     results = []
     for name in names:  # one strategy at a time keeps a local Ollama from thrashing
         strategy = resolve_strategy(config, name)
