@@ -179,7 +179,14 @@ def main(argv: list[str] | None = None) -> int:
         "init": _cmd_init, "config-check": _cmd_config_check, "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "eval": _cmd_eval, "budget": _cmd_budget, "serve": _cmd_serve,
     }
-    return handlers[args.command](args)
+    try:
+        return handlers[args.command](args)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        # Friendly one-liner instead of a traceback (unknown model/strategy lists
+        # valid options; missing/!parseable config; bad fusion config).
+        msg = exc.args[0] if exc.args else str(exc)
+        print(f"error: {msg}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

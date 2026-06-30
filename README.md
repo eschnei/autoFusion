@@ -26,16 +26,20 @@ Next: Phase 2 minimal fusion (MoA), Phase 3 calibration, Phase 4 CLI/budget/endp
 ## Quickstart
 
 ```bash
-uv sync                                    # install
-cp .env.example .env                        # add keys (optional; skip for local-only)
+uv sync                                     # install
+ollama serve & ; ollama pull llama3.2       # local $0 path — no key needed
+ollama pull qwen2.5:3b                       # a second proposer (for fusion)
 
-# Local $0 path — no key needed:
-ollama serve & ; ollama pull llama3.2
-
-uv run autofusion config-check              # show models + key status
-uv run autofusion smoke -m llama3.2         # call one model end-to-end
-uv run autofusion eval -m llama3.2 -n 20    # baseline a model on 20 HumanEval tasks
+uv run autofusion init                       # scaffold autofusion.toml + show key/endpoint status
+uv run autofusion config-check               # which models/keys are usable
+uv run autofusion smoke -m llama3.2          # call one model end-to-end
+uv run autofusion fuse "your prompt"         # run fusion (MoA) on one prompt
+uv run autofusion eval -m llama3.2,fusion -n 5   # score baselines + fusion on HumanEval
+uv run autofusion budget status              # show the configured cost caps
+uv run autofusion serve                      # OpenAI-compatible endpoint on :8000
 ```
+
+Point any OpenAI client at `http://localhost:8000/v1` and use `model: "fusion"` (or a configured model name). All commands accept `-c/--config <path>`; for hosted models, `cp .env.example .env` and add a key. Budget caps in `[budget]` are enforced **before** any call fires.
 
 Edit [`autofusion.toml`](autofusion.toml) to register models (litellm id, optional `api_base`, per-token cost; `0` = free/local).
 
