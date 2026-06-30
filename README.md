@@ -70,6 +70,18 @@ Why **LiveCodeBench** and not HumanEval: frontier models score ~90%+ on HumanEva
 
 HumanEval grading **executes model-generated code**. autoFusion runs each program in an isolated subprocess with a hard timeout, CPU/memory/file-size limits, and a reliability guard that neuters destructive syscalls (`src/autofusion/eval/sandbox.py`). This is adequate for benchmark models you control — **not** a boundary for adversarial code. For untrusted-at-scale use, run inside a locked-down container (no network, gVisor/seccomp).
 
+## Auth: API keys only (by design — don't re-add subscription auth)
+
+autoFusion authenticates to providers with **API keys only**, read from the environment / `.env`. It deliberately does **not** support subscription or CLI-token auth (extracting a session token from a desktop/CLI subscription). For a tool that strangers self-host, that path is a **ToS/ban risk** and is no longer cost-advantaged. This is a settled decision — please don't re-introduce it. Local models via Ollama need no key at all (the true $0 path).
+
+## Model registry & maintenance
+
+Per-model **cost and limits come from LiteLLM's `model_cost` map** (auto-pulled, kept current upstream), with a **config-level override**: set `input_cost_per_token` / `output_cost_per_token` in any `[[models]]` entry (`0` marks free/local and skips budget checks). So the registry is *auto-pulled + community/config override* — no hand-maintained price table to rot. If a model's cost shows as `0`/unknown, set it explicitly in your config.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The one hard rule: **never weaken the eval** — calibration tests against known-correct solutions must stay green.
+
 ## License
 
-Apache 2.0. **Auth is API-keys-only by design** — subscription/CLI token auth is a ToS/ban risk for a tool others run, and is intentionally not supported.
+Apache 2.0.
