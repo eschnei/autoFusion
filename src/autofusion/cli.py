@@ -8,6 +8,7 @@ Commands:
   route   "prompt"      run the router (picks one model) on one prompt (Phase 6)
   cascade "prompt"      cheap->critic->escalate cost cascade on one prompt (Phase 7)
   eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
+  optimize --benchmark  sweep recipes over available models -> quality×cost frontier
   budget  status        show the configured budget caps
 """
 
@@ -175,6 +176,28 @@ def _cmd_cascade(args) -> int:
     return 0
 
 
+def _cmd_optimize(args) -> int:
+    from .eval.runner import run_baseline
+    from .optimizer import (
+        RecipeOutcome, available_model_names, candidate_recipes, mark_pareto, render,
+    )
+
+    cfg = load_config(args.config)
+    available = available_model_names(cfg)
+    recipes = candidate_recipes(cfg, available)
+    if not recipes:
+        print("no available models — add a provider key or run Ollama.", file=sys.stderr)
+        return 1
+    print(f"optimizing on {args.benchmark} (limit={args.limit}) over "
+          f"{len(recipes)} recipes: {', '.join(recipes)}\n")
+    results = asyncio.run(
+        run_baseline(cfg, recipes, args.benchmark, limit=args.limit, concurrency=args.concurrency)
+    )
+    outcomes = mark_pareto([RecipeOutcome.from_run(r) for r in results])
+    print(render(outcomes, available))
+    return 0
+
+
 def _cmd_serve(args) -> int:
     import uvicorn
 
@@ -242,12 +265,18 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("-n", "--limit", type=int, default=None, help="limit number of tasks")
     p_eval.add_argument("--concurrency", type=int, default=4)
 
+    p_opt = sub.add_parser("optimize", help="sweep recipes -> quality×cost frontier")
+    p_opt.add_argument("-b", "--benchmark", default="humaneval")
+    p_opt.add_argument("-n", "--limit", type=int, default=None, help="limit number of tasks")
+    p_opt.add_argument("--concurrency", type=int, default=4)
+
     args = parser.parse_args(argv)
     handlers = {
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
-        "eval": _cmd_eval, "budget": _cmd_budget, "serve": _cmd_serve,
+        "eval": _cmd_eval, "optimize": _cmd_optimize,
+        "budget": _cmd_budget, "serve": _cmd_serve,
     }
     try:
         return handlers[args.command](args)

@@ -54,6 +54,16 @@ autofusion -c configs/local-plus-frontier.toml fuse "your prompt"
 
 See [`configs/local-plus-frontier.toml`](configs/local-plus-frontier.toml). If the aggregator's key is missing, `config-check` flags it (`MISSING OPENAI_API_KEY`) rather than crashing, and the tight `[budget]` cap is your safety net since only the aggregator spends.
 
+## Finding the best recipe: `optimize`
+
+The headline workflow. For a job (a benchmark, for now), autoFusion sweeps candidate recipes — every single model you can call, plus `fusion`/`route`/`cascade` — over the **available** model pool and reports the **quality×cost Pareto frontier** with a recommended recipe:
+
+```bash
+autofusion optimize -b livecodebench -n 50
+```
+
+"Available" = callable right now = **local Ollama + any model whose API key is present**. Add a key and the pool (and the frontier) grows. The frontier (★) is the set of recipes where you can't get more quality without paying more — everything behind it is strictly wasteful. It tells you, per job, *which* combination of models to fuse (or whether to fuse at all): on an easy job the cheap model may dominate and fusion is off the frontier; on a hard one a diverse fused recipe may push the frontier past any single model. You don't assert which recipe is best — you measure it.
+
 ## Cutting cost: the cascade
 
 Fusion raises the quality *ceiling* but costs N× calls. The **cascade** does the opposite — it holds quality and drops *cost*: try the **cheapest** model first, have a cheap **critic** score the answer, and **escalate** to a stronger tier (or to `fusion`) only when confidence is low. Most requests resolve at the cheap tier, so you pay frontier prices only on the hard tail (the idea behind Cognition's "frontier quality at ~35% lower cost").
