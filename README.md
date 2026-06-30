@@ -75,6 +75,16 @@ autofusion bestofn "your prompt"             # ad-hoc: no tests, a critic model 
 
 Configured in `[bestofn]` (`models` basket, `n`, `critic`, `temperature`). In one local run, best-of-4 over three small models hit **100%** where the best single small model managed **75%** — $0, no frontier call. For non-verifiable tasks a `critic` model picks the best candidate (its ceiling is the critic's own quality, so there one strong model helps).
 
+## The scoreboard: `report`
+
+Compare **autoFusion's recipes vs. every model you can call**, across multiple task types, in one table:
+
+```bash
+autofusion report --benchmarks humaneval,gsm8k -n 50
+```
+
+Rows are flagged `model` ("them") vs `RECIPE` ("us"); columns are each task's pass@1 (★ = task winner) plus an average and $/task; the footer calls the headline — **best autoFusion recipe vs. best single model**. The pool is availability-gated, so the day you add an Anthropic/OpenAI/Gemini key, those frontier models drop in as rows and this becomes the real "us vs. the big models, on various tasks" comparison — with cost attached, and nothing asserted.
+
 ## Cutting cost: the cascade
 
 Fusion raises the quality *ceiling* but costs N× calls. The **cascade** does the opposite — it holds quality and drops *cost*: try the **cheapest** model first, have a cheap **critic** score the answer, and **escalate** to a stronger tier (or to `fusion`) only when confidence is low. Most requests resolve at the cheap tier, so you pay frontier prices only on the hard tail (the idea behind Cognition's "frontier quality at ~35% lower cost").
