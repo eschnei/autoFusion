@@ -54,6 +54,18 @@ autofusion -c configs/local-plus-frontier.toml fuse "your prompt"
 
 See [`configs/local-plus-frontier.toml`](configs/local-plus-frontier.toml). If the aggregator's key is missing, `config-check` flags it (`MISSING OPENAI_API_KEY`) rather than crashing, and the tight `[budget]` cap is your safety net since only the aggregator spends.
 
+## Benchmarking against frontier models
+
+The thesis is "fusion can beat the best single frontier model." Test it with the same `eval` instrument — fusion is scored like any model:
+
+```bash
+# needs the relevant API keys in .env. Spends REAL money — caps in the profile fire first.
+autofusion -c configs/frontier-bench.toml eval -b livecodebench \
+    -m gpt-4o,claude-sonnet,gemini,fusion -n 50
+```
+
+Why **LiveCodeBench** and not HumanEval: frontier models score ~90%+ on HumanEval, so there's no headroom to detect a gain. LiveCodeBench is contamination-resistant and lands frontier models ~50-70%, leaving room to see whether fusion actually helps. The leaderboard reports the decisive paired metric — **pass@1 delta + cost/call multiple + the aggregator-alone baseline** — so you can answer "did fusion beat the best single model by *more than its cost multiple costs*?" honestly. (v1 grades stdin/stdout problems on public tests; functional/LeetCode problems are skipped and logged.)
+
 ## Security note
 
 HumanEval grading **executes model-generated code**. autoFusion runs each program in an isolated subprocess with a hard timeout, CPU/memory/file-size limits, and a reliability guard that neuters destructive syscalls (`src/autofusion/eval/sandbox.py`). This is adequate for benchmark models you control — **not** a boundary for adversarial code. For untrusted-at-scale use, run inside a locked-down container (no network, gVisor/seccomp).

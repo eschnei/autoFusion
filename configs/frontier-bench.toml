@@ -1,0 +1,50 @@
+# Frontier benchmark profile — test the core thesis: does fusion beat the best
+# single frontier model? Run on LiveCodeBench (frontier ~50-70%, real headroom).
+#
+#   autofusion -c configs/frontier-bench.toml eval -b livecodebench \
+#       -m gpt-4o,claude-sonnet,gemini,fusion -n 50
+#
+# WARNING: this spends REAL money — fusion is (N proposers + 1 aggregator) frontier
+# calls per task. The [budget] caps below are enforced before any call fires.
+# Update the model ids below to the current frontier models you have keys for.
+
+# --- Frontier baselines (the bar to beat). Keys from env / .env. ---
+[[models]]
+name = "gpt-4o"
+model = "gpt-4o"
+
+[[models]]
+name = "claude-sonnet"
+model = "anthropic/claude-3-5-sonnet-20241022"
+
+[[models]]
+name = "gemini"
+model = "gemini/gemini-1.5-pro"
+
+# --- Local proposers (free) for the cost-sweet-spot fusion config. ---
+[[models]]
+name = "llama3.2"
+model = "ollama/llama3.2"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+[[models]]
+name = "qwen2.5-coder"
+model = "ollama/qwen2.5-coder:7b"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+# Default fusion = local proposers + ONE frontier aggregator (the cheap config
+# most likely to beat a single frontier model). Swap proposers to frontier ids
+# for a full hosted-MoA comparison.
+[fusion]
+proposers = ["llama3.2", "qwen2.5-coder"]
+aggregator = "gpt-4o"
+layers = 1
+
+[budget]
+# Real spend — keep tight. Caps fire BEFORE any call.
+per_request_usd = 0.20
+total_usd = 20.0

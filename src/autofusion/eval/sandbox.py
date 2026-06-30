@@ -51,6 +51,13 @@ class ExecResult:
     detail: str  # "passed" | "failed: ..." | "timeout" | "error: ..."
 
 
+@dataclass
+class RunOutput:
+    returncode: int
+    stdout: str
+    timed_out: bool = False
+
+
 def run_python(program: str, timeout: float = 10.0) -> ExecResult:
     """Run a self-contained Python program; pass == clean exit (returncode 0)."""
     full = _RELIABILITY_GUARD + "\n" + program
@@ -75,3 +82,23 @@ def run_python(program: str, timeout: float = 10.0) -> ExecResult:
             return ExecResult(True, "passed")
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         return ExecResult(False, "failed: " + (tail[-1] if tail else f"exit {proc.returncode}"))
+
+
+def run_with_stdin(program: str, stdin: str = "", timeout: float = 10.0) -> RunOutput:
+    """Run a program feeding `stdin`, capturing stdout (for stdin/stdout benchmarks
+    like LiveCodeBench). Same isolation + reliability guard as run_python."""
+    full = _RELIABILITY_GUARD + "\n" + program
+    with tempfile.TemporaryDirectory() as workdir:
+        prog_path = os.path.join(workdir, "prog.py")
+        with open(prog_path, "w") as fh:
+            fh.write(full)
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": workdir, "TMPDIR": workdir}
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-I", prog_path],
+                cwd=workdir, env=env, input=stdin,
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return RunOutput(returncode=-1, stdout="", timed_out=True)
+        return RunOutput(returncode=proc.returncode, stdout=proc.stdout)
