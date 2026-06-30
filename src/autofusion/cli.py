@@ -21,23 +21,51 @@ from .providers import complete
 from .strategies import resolve_strategy
 
 
-def _cmd_config_check(args) -> int:
-    cfg = load_config(args.config)
-    print(f"config: {cfg.path}\n")
+_KEY_ENV = {
+    "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY",
+}
+
+
+def _print_model_table(cfg) -> None:
+    """Render the model registry + per-model key/endpoint status."""
     print(f"{'model':<16}{'litellm id':<26}{'local':>7}{'key/endpoint':>20}")
     print("-" * 69)
-    key_env = {
-        "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
-        "gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY",
-    }
     for spec in cfg.models.values():
         if spec.is_local:
             status = spec.api_base or "ollama"
         else:
             provider = spec.model.split("/")[0] if "/" in spec.model else "openai"
-            env = key_env.get(provider, f"{provider.upper()}_API_KEY")
+            env = _KEY_ENV.get(provider, f"{provider.upper()}_API_KEY")
             status = "OK" if os.environ.get(env) else f"MISSING {env}"
         print(f"{spec.name:<16}{spec.model:<26}{'yes' if spec.is_local else 'no':>7}{status:>20}")
+
+
+def _cmd_config_check(args) -> int:
+    cfg = load_config(args.config)
+    print(f"config: {cfg.path}\n")
+    _print_model_table(cfg)
+    return 0
+
+
+def _cmd_init(args) -> int:
+    from pathlib import Path
+
+    from .config import DEFAULT_CONFIG_NAME, STARTER_CONFIG, load_config
+
+    target = Path(args.config) if args.config else Path(DEFAULT_CONFIG_NAME)
+    if target.exists() and not args.force:
+        print(f"{target} already exists — not overwriting (use --force to replace).")
+        return 0
+    target.write_text(STARTER_CONFIG)
+    print(f"wrote {target}\n")
+    _print_model_table(load_config(target))
+    print(
+        "\nNext steps:\n"
+        "  • local $0 path: `ollama serve` then `ollama pull llama3.2` (and qwen2.5:3b)\n"
+        "  • hosted models: copy .env.example to .env and add a provider key\n"
+        "  • then: `autofusion smoke -m llama3.2`  or  `autofusion fuse \"...\"`"
+    )
     return 0
 
 
@@ -107,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--config", help="path to autofusion.toml")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_init = sub.add_parser("init", help="scaffold autofusion.toml + check keys")
+    p_init.add_argument("-f", "--force", action="store_true", help="overwrite an existing config")
+
     sub.add_parser("config-check", help="show configured models + key status")
 
     p_smoke = sub.add_parser("smoke", help="call one model end-to-end")
@@ -130,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     handlers = {
-        "config-check": _cmd_config_check, "smoke": _cmd_smoke,
+        "init": _cmd_init, "config-check": _cmd_config_check, "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "eval": _cmd_eval, "budget": _cmd_budget,
     }
     return handlers[args.command](args)

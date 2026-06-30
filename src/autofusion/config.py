@@ -15,6 +15,41 @@ from dotenv import load_dotenv
 
 DEFAULT_CONFIG_NAME = "autofusion.toml"
 
+# Starter config written by `autofusion init` — local Ollama $0 profile by default.
+STARTER_CONFIG = """\
+# autoFusion configuration. API keys are read from the environment / .env,
+# NEVER stored here. Per-token cost 0 = free/local (skips budget checks).
+
+[[models]]
+name = "llama3.2"
+model = "ollama/llama3.2"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+[[models]]
+name = "qwen2.5"
+model = "ollama/qwen2.5:3b"
+api_base = "http://localhost:11434"
+input_cost_per_token = 0.0
+output_cost_per_token = 0.0
+
+# Example hosted model (uncomment + add OPENAI_API_KEY to .env to use):
+# [[models]]
+# name = "gpt-4o-mini"
+# model = "gpt-4o-mini"
+
+[fusion]
+proposers = ["llama3.2", "qwen2.5"]
+aggregator = "llama3.2"
+layers = 1
+
+[budget]
+# Hard caps enforced before calls fire. null = unlimited.
+per_request_usd = 0.50
+total_usd = 10.0
+"""
+
 
 @dataclass(frozen=True)
 class ModelSpec:
