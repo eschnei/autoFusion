@@ -161,7 +161,60 @@ class LiveCodeBench:
         return ScoreResult(True, "passed")
 
 
-BENCHMARKS = {HumanEval.name: HumanEval, LiveCodeBench.name: LiveCodeBench}
+def _extract_last_number(text: str) -> str | None:
+    """Last number in the text (handles 'The answer is 42.' and thousands commas)."""
+    nums = re.findall(r"-?\d[\d,]*\.?\d*", text.replace(",", ""))
+    return nums[-1].rstrip(".") if nums else None
+
+
+class GSM8K:
+    """GSM8K grade-school math — deterministic numeric exact-match. A reasoning
+    task type distinct from code, for the cross-task comparison."""
+
+    name = "gsm8k"
+
+    _SYSTEM = (
+        "You are a math expert. Solve the problem with brief step-by-step reasoning, "
+        "then end with a line of exactly: 'The answer is <number>.'"
+    )
+
+    def load(self, limit: int | None = None) -> list[Task]:
+        from datasets import load_dataset
+
+        rows = load_dataset("openai/gsm8k", "main")["test"]
+        if limit is not None:
+            rows = rows.select(range(min(limit, len(rows))))
+        tasks: list[Task] = []
+        for i, row in enumerate(rows):
+            gold = row["answer"].split("####")[-1].strip().replace(",", "")
+            tasks.append(
+                Task(
+                    task_id=f"gsm8k/{i}",
+                    messages=[
+                        {"role": "system", "content": self._SYSTEM},
+                        {"role": "user", "content": row["question"]},
+                    ],
+                    meta={"gold": gold},
+                )
+            )
+        return tasks
+
+    def score(self, task: Task, output: str) -> ScoreResult:
+        pred = _extract_last_number(output)
+        if pred is None:
+            return ScoreResult(False, "failed: no number in output")
+        try:
+            ok = float(pred) == float(task.meta["gold"])
+        except ValueError:
+            ok = False
+        return ScoreResult(ok, "passed" if ok else f"failed: got {pred}, want {task.meta['gold']}")
+
+
+BENCHMARKS = {
+    HumanEval.name: HumanEval,
+    LiveCodeBench.name: LiveCodeBench,
+    GSM8K.name: GSM8K,
+}
 
 
 def get_benchmark(name: str):
