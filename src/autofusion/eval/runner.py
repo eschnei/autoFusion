@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import asyncio
 
+from ..budget import BudgetTracker
 from ..config import Config
 from ..strategies import resolve_strategy
 from .benchmarks import Task, get_benchmark
 from .results import ModelRunResult, TaskOutcome
 
 
-async def _run_one(strategy, task: Task, benchmark, sem: asyncio.Semaphore) -> TaskOutcome:
+async def _run_one(strategy, task: Task, benchmark, sem: asyncio.Semaphore, budget) -> TaskOutcome:
     async with sem:
-        completion = await strategy.run(task.messages, temperature=0.0)
+        completion = await strategy.run(task.messages, budget=budget, temperature=0.0)
     if not completion.ok:
         return TaskOutcome(
             task_id=task.task_id, model=strategy.name, passed=False,
@@ -32,9 +33,11 @@ async def _run_one(strategy, task: Task, benchmark, sem: asyncio.Semaphore) -> T
     )
 
 
-async def run_strategy(strategy, tasks: list[Task], benchmark, concurrency: int = 4) -> ModelRunResult:
+async def run_strategy(
+    strategy, tasks: list[Task], benchmark, concurrency: int = 4, budget=None
+) -> ModelRunResult:
     sem = asyncio.Semaphore(concurrency)
-    outcomes = await asyncio.gather(*(_run_one(strategy, t, benchmark, sem) for t in tasks))
+    outcomes = await asyncio.gather(*(_run_one(strategy, t, benchmark, sem, budget) for t in tasks))
     n = len(outcomes)
     return ModelRunResult(
         model=strategy.name, benchmark=benchmark.name, n_tasks=n,
@@ -53,8 +56,11 @@ async def run_baseline(
 ) -> list[ModelRunResult]:
     benchmark = get_benchmark(benchmark_name)
     tasks = benchmark.load(limit=limit)
+    budget = BudgetTracker.from_config(config.budget)  # shared cap across the whole run
     results = []
     for name in names:  # one strategy at a time keeps a local Ollama from thrashing
         strategy = resolve_strategy(config, name)
-        results.append(await run_strategy(strategy, tasks, benchmark, concurrency=concurrency))
+        results.append(
+            await run_strategy(strategy, tasks, benchmark, concurrency=concurrency, budget=budget)
+        )
     return results

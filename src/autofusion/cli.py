@@ -5,6 +5,7 @@ Commands:
   smoke   --model M     call one model end-to-end (Phase 0 gate)
   fuse    "prompt"      run fusion (MoA) on one prompt (Phase 2)
   eval    --models a,b  run a benchmark baseline / fusion -> leaderboard (Phase 1/2)
+  budget  status        show the configured budget caps
 """
 
 from __future__ import annotations
@@ -14,28 +15,57 @@ import asyncio
 import os
 import sys
 
+from .budget import BudgetExceeded, BudgetTracker
 from .config import load_config
 from .providers import complete
 from .strategies import resolve_strategy
 
 
-def _cmd_config_check(args) -> int:
-    cfg = load_config(args.config)
-    print(f"config: {cfg.path}\n")
+_KEY_ENV = {
+    "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY",
+}
+
+
+def _print_model_table(cfg) -> None:
+    """Render the model registry + per-model key/endpoint status."""
     print(f"{'model':<16}{'litellm id':<26}{'local':>7}{'key/endpoint':>20}")
     print("-" * 69)
-    key_env = {
-        "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
-        "gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY",
-    }
     for spec in cfg.models.values():
         if spec.is_local:
             status = spec.api_base or "ollama"
         else:
             provider = spec.model.split("/")[0] if "/" in spec.model else "openai"
-            env = key_env.get(provider, f"{provider.upper()}_API_KEY")
+            env = _KEY_ENV.get(provider, f"{provider.upper()}_API_KEY")
             status = "OK" if os.environ.get(env) else f"MISSING {env}"
         print(f"{spec.name:<16}{spec.model:<26}{'yes' if spec.is_local else 'no':>7}{status:>20}")
+
+
+def _cmd_config_check(args) -> int:
+    cfg = load_config(args.config)
+    print(f"config: {cfg.path}\n")
+    _print_model_table(cfg)
+    return 0
+
+
+def _cmd_init(args) -> int:
+    from pathlib import Path
+
+    from .config import DEFAULT_CONFIG_NAME, STARTER_CONFIG, load_config
+
+    target = Path(args.config) if args.config else Path(DEFAULT_CONFIG_NAME)
+    if target.exists() and not args.force:
+        print(f"{target} already exists — not overwriting (use --force to replace).")
+        return 0
+    target.write_text(STARTER_CONFIG)
+    print(f"wrote {target}\n")
+    _print_model_table(load_config(target))
+    print(
+        "\nNext steps:\n"
+        "  • local $0 path: `ollama serve` then `ollama pull llama3.2` (and qwen2.5:3b)\n"
+        "  • hosted models: copy .env.example to .env and add a provider key\n"
+        "  • then: `autofusion smoke -m llama3.2`  or  `autofusion fuse \"...\"`"
+    )
     return 0
 
 
@@ -56,18 +86,42 @@ def _cmd_smoke(args) -> int:
     return 0
 
 
+def _cmd_budget(args) -> int:
+    cfg = load_config(args.config)
+    print(BudgetTracker.from_config(cfg.budget).status_line())
+    return 0
+
+
 def _cmd_fuse(args) -> int:
     cfg = load_config(args.config)
     strategy = resolve_strategy(cfg, "fusion")
+    budget = BudgetTracker.from_config(cfg.budget)
     props = ", ".join(p.name for p in strategy.proposers)
     print(f"-> fusion | proposers: {props} | aggregator: {strategy.aggregator.name} "
           f"| layers: {strategy.layers}\n")
-    result = asyncio.run(strategy.run([{"role": "user", "content": args.prompt}]))
+    try:
+        result = asyncio.run(
+            strategy.run([{"role": "user", "content": args.prompt}], budget=budget)
+        )
+    except BudgetExceeded as exc:
+        print(f"budget cap hit: {exc}", file=sys.stderr)
+        return 2
     if not result.ok:
         print(f"ERROR: {result.error}", file=sys.stderr)
         return 1
     print(result.text)
     print(f"\n[{result.latency_s:.2f}s | {result.n_calls} calls | ${result.cost_usd:.6f}]")
+    return 0
+
+
+def _cmd_serve(args) -> int:
+    import uvicorn
+
+    from .server import create_app
+
+    cfg = load_config(args.config)
+    print(f"serving autoFusion on http://{args.host}:{args.port}  (POST /v1/chat/completions)")
+    uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_level="info")
     return 0
 
 
@@ -92,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--config", help="path to autofusion.toml")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_init = sub.add_parser("init", help="scaffold autofusion.toml + check keys")
+    p_init.add_argument("-f", "--force", action="store_true", help="overwrite an existing config")
+
     sub.add_parser("config-check", help="show configured models + key status")
 
     p_smoke = sub.add_parser("smoke", help="call one model end-to-end")
@@ -100,6 +157,13 @@ def main(argv: list[str] | None = None) -> int:
 
     p_fuse = sub.add_parser("fuse", help="run fusion (MoA) on one prompt")
     p_fuse.add_argument("prompt", help="the prompt to fuse")
+
+    p_budget = sub.add_parser("budget", help="budget caps")
+    p_budget.add_argument("action", choices=["status"], help="what to show")
+
+    p_serve = sub.add_parser("serve", help="OpenAI-compatible HTTP endpoint")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8000)
 
     p_eval = sub.add_parser("eval", help="run a benchmark baseline or fusion")
     p_eval.add_argument(
@@ -112,10 +176,17 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     handlers = {
-        "config-check": _cmd_config_check, "smoke": _cmd_smoke,
-        "fuse": _cmd_fuse, "eval": _cmd_eval,
+        "init": _cmd_init, "config-check": _cmd_config_check, "smoke": _cmd_smoke,
+        "fuse": _cmd_fuse, "eval": _cmd_eval, "budget": _cmd_budget, "serve": _cmd_serve,
     }
-    return handlers[args.command](args)
+    try:
+        return handlers[args.command](args)
+    except (KeyError, ValueError, FileNotFoundError) as exc:
+        # Friendly one-liner instead of a traceback (unknown model/strategy lists
+        # valid options; missing/!parseable config; bad fusion config).
+        msg = exc.args[0] if exc.args else str(exc)
+        print(f"error: {msg}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
