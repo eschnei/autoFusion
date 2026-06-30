@@ -37,6 +37,13 @@ proposers = ["llama3.2", "qwen2.5"]
 aggregator = "llama3.2"
 layers = 1
 
+[router]
+# Phase 6: picks ONE model per request. First matching rule wins, else default.
+default = "llama3.2"
+[[router.rules]]
+match = "code|function|algorithm|def |class |array|sort|implement"
+model = "qwen2.5-coder"
+
 [budget]
 # Phase 4: hard caps enforced before calls fire. null = unlimited.
 per_request_usd = 0.50

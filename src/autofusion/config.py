@@ -44,6 +44,13 @@ proposers = ["llama3.2", "qwen2.5"]
 aggregator = "llama3.2"
 layers = 1
 
+[router]
+# Picks ONE model per request: first matching rule wins, else `default`.
+default = "llama3.2"
+[[router.rules]]
+match = "code|function|algorithm|def |class |array|sort|implement"
+model = "qwen2.5"
+
 [budget]
 # Hard caps enforced before calls fire. null = unlimited.
 per_request_usd = 0.50
@@ -81,10 +88,19 @@ class BudgetConfig:
 
 
 @dataclass
+class RouterConfig:
+    """Heuristic router: ordered (regex, model-name) rules + a default."""
+
+    default: str | None = None
+    rules: list[tuple[str, str]] = field(default_factory=list)  # (pattern, model name)
+
+
+@dataclass
 class Config:
     models: dict[str, ModelSpec]
     fusion: FusionConfig
     budget: BudgetConfig
+    router: RouterConfig = field(default_factory=RouterConfig)
     path: Path | None = None
 
     def model(self, name: str) -> ModelSpec:
@@ -145,4 +161,9 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
         per_request_usd=b.get("per_request_usd"),
         total_usd=b.get("total_usd"),
     )
-    return Config(models=models, fusion=fusion, budget=budget, path=path)
+    r = raw.get("router", {})
+    router = RouterConfig(
+        default=r.get("default"),
+        rules=[(rule["match"], rule["model"]) for rule in r.get("rules", [])],
+    )
+    return Config(models=models, fusion=fusion, budget=budget, router=router, path=path)
