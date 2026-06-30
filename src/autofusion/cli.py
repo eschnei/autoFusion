@@ -5,6 +5,7 @@ Commands:
   smoke   --model M     call one model end-to-end (Phase 0 gate)
   fuse    "prompt"      run fusion (MoA) on one prompt (Phase 2)
   eval    --models a,b  run a benchmark baseline / fusion -> leaderboard (Phase 1/2)
+  budget  status        show the configured budget caps
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import asyncio
 import os
 import sys
 
+from .budget import BudgetExceeded, BudgetTracker
 from .config import load_config
 from .providers import complete
 from .strategies import resolve_strategy
@@ -56,13 +58,26 @@ def _cmd_smoke(args) -> int:
     return 0
 
 
+def _cmd_budget(args) -> int:
+    cfg = load_config(args.config)
+    print(BudgetTracker.from_config(cfg.budget).status_line())
+    return 0
+
+
 def _cmd_fuse(args) -> int:
     cfg = load_config(args.config)
     strategy = resolve_strategy(cfg, "fusion")
+    budget = BudgetTracker.from_config(cfg.budget)
     props = ", ".join(p.name for p in strategy.proposers)
     print(f"-> fusion | proposers: {props} | aggregator: {strategy.aggregator.name} "
           f"| layers: {strategy.layers}\n")
-    result = asyncio.run(strategy.run([{"role": "user", "content": args.prompt}]))
+    try:
+        result = asyncio.run(
+            strategy.run([{"role": "user", "content": args.prompt}], budget=budget)
+        )
+    except BudgetExceeded as exc:
+        print(f"budget cap hit: {exc}", file=sys.stderr)
+        return 2
     if not result.ok:
         print(f"ERROR: {result.error}", file=sys.stderr)
         return 1
@@ -101,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     p_fuse = sub.add_parser("fuse", help="run fusion (MoA) on one prompt")
     p_fuse.add_argument("prompt", help="the prompt to fuse")
 
+    p_budget = sub.add_parser("budget", help="budget caps")
+    p_budget.add_argument("action", choices=["status"], help="what to show")
+
     p_eval = sub.add_parser("eval", help="run a benchmark baseline or fusion")
     p_eval.add_argument(
         "-m", "--models", required=True,
@@ -113,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handlers = {
         "config-check": _cmd_config_check, "smoke": _cmd_smoke,
-        "fuse": _cmd_fuse, "eval": _cmd_eval,
+        "fuse": _cmd_fuse, "eval": _cmd_eval, "budget": _cmd_budget,
     }
     return handlers[args.command](args)
 

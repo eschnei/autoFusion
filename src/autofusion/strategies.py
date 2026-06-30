@@ -17,8 +17,22 @@ import asyncio
 import time
 from dataclasses import dataclass
 
+from .budget import BudgetTracker, estimate_request_cost
 from .config import Config, ModelSpec
 from .providers import CompletionResult, Message, acomplete
+
+
+async def _guarded_acomplete(
+    spec: ModelSpec, messages: list[Message], budget: BudgetTracker | None, **kw
+) -> CompletionResult:
+    """acomplete, but a budget cap is checked BEFORE the call fires and the
+    actual cost is recorded after. Over-cap raises BudgetExceeded (no call)."""
+    if budget is not None:
+        budget.check(estimate_request_cost(spec, messages))
+    result = await acomplete(spec, messages, **kw)
+    if budget is not None and result.ok:
+        budget.record(result.cost_usd)
+    return result
 
 # Synthesis prompt appended as a final user turn. We keep the ORIGINAL messages
 # (including any output-format system instruction, e.g. "return only a code
@@ -51,8 +65,10 @@ class SingleModel:
     def name(self) -> str:
         return self.spec.name
 
-    async def run(self, messages: list[Message], **kw) -> CompletionResult:
-        return await acomplete(self.spec, messages, **kw)
+    async def run(
+        self, messages: list[Message], budget: BudgetTracker | None = None, **kw
+    ) -> CompletionResult:
+        return await _guarded_acomplete(self.spec, messages, budget, **kw)
 
 
 @dataclass
@@ -67,7 +83,9 @@ class Fusion:
     # Set > 0 to get diverse drafts — required for Self-MoA (same model repeated).
     proposer_temperature: float | None = None
 
-    async def run(self, messages: list[Message], **kw) -> CompletionResult:
+    async def run(
+        self, messages: list[Message], budget: BudgetTracker | None = None, **kw
+    ) -> CompletionResult:
         start = time.perf_counter()
         total_cost = 0.0
         n_calls = 0
@@ -83,7 +101,7 @@ class Fusion:
                 messages if layer == 0 else build_aggregate_messages(messages, candidates)
             )
             results = await asyncio.gather(
-                *(acomplete(p, layer_messages, **prop_kw) for p in self.proposers)
+                *(_guarded_acomplete(p, layer_messages, budget, **prop_kw) for p in self.proposers)
             )
             total_cost += sum(r.cost_usd for r in results)
             n_calls += len(results)
@@ -94,7 +112,9 @@ class Fusion:
                     error="all proposers failed", n_calls=n_calls,
                 )
 
-        agg = await acomplete(self.aggregator, build_aggregate_messages(messages, candidates), **kw)
+        agg = await _guarded_acomplete(
+            self.aggregator, build_aggregate_messages(messages, candidates), budget, **kw
+        )
         total_cost += agg.cost_usd
         n_calls += 1
         return CompletionResult(
