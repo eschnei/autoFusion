@@ -1,33 +1,84 @@
-# Frontier benchmark profile — test the core thesis: does fusion beat the best
-# single frontier model? Run on LiveCodeBench (frontier ~50-70%, real headroom).
+# Frontier benchmark profile — the real "autoFusion vs. the field" run.
+# A curated, diverse basket across Anthropic + OpenAI + OpenRouter(open) + local.
+# Keys come from .env (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY).
 #
-#   autofusion -c configs/frontier-bench.toml eval -b livecodebench \
-#       -m gpt-4o,claude-sonnet,gemini,fusion -n 50
+#   autofusion -c configs/frontier-bench.toml config-check          # confirm keys
+#   autofusion -c configs/frontier-bench.toml registry              # capabilities + cost
+#   autofusion -c configs/frontier-bench.toml report --benchmarks humaneval,gsm8k -n 15   # smoke (~$5)
+#   autofusion -c configs/frontier-bench.toml report --benchmarks humaneval,gsm8k,livecodebench -n 50  # full
 #
-# WARNING: this spends REAL money — fusion is (N proposers + 1 aggregator) frontier
-# calls per task. The [budget] caps below are enforced before any call fires.
-# Update the model ids below to the current frontier models you have keys for.
+# WARNING: this spends REAL money. The [budget] cap below is enforced BEFORE every
+# call fires. Costs per token are approximate (for budget estimation) — verify
+# OpenRouter model slugs + live prices at https://openrouter.ai/models.
 
-# --- Frontier baselines (the bar to beat). Keys from env / .env. ---
+# ---------- Anthropic (the bar + cheap-but-strong members) ----------
+[[models]]
+name = "opus"            # claude-opus-4-8 — THE BAR to beat
+model = "anthropic/claude-opus-4-8"
+input_cost_per_token = 0.000005
+output_cost_per_token = 0.000025
+capabilities = ["code", "reasoning", "general"]
+
+[[models]]
+name = "sonnet"
+model = "anthropic/claude-sonnet-4-6"
+input_cost_per_token = 0.000003
+output_cost_per_token = 0.000015
+capabilities = ["code", "reasoning", "general"]
+
+[[models]]
+name = "haiku"
+model = "anthropic/claude-haiku-4-5"
+input_cost_per_token = 0.000001
+output_cost_per_token = 0.000005
+capabilities = ["general", "chat"]
+
+# ---------- OpenAI ----------
 [[models]]
 name = "gpt-4o"
 model = "gpt-4o"
+input_cost_per_token = 0.0000025
+output_cost_per_token = 0.00001
+capabilities = ["code", "reasoning", "general"]
 
 [[models]]
-name = "claude-sonnet"
-model = "anthropic/claude-3-5-sonnet-20241022"
+name = "gpt-4o-mini"
+model = "gpt-4o-mini"
+input_cost_per_token = 0.00000015
+output_cost_per_token = 0.0000006
+capabilities = ["general", "chat"]
+
+# ---------- OpenRouter — diverse STRONG-OPEN basket (cheap) ----------
+# Verify exact slugs at https://openrouter.ai/models and swap as you like.
+[[models]]
+name = "deepseek"
+model = "openrouter/deepseek/deepseek-chat"
+input_cost_per_token = 0.00000014
+output_cost_per_token = 0.00000028
+capabilities = ["code", "reasoning", "general"]
 
 [[models]]
-name = "gemini"
-model = "gemini/gemini-1.5-pro"
+name = "qwen-72b"
+model = "openrouter/qwen/qwen-2.5-72b-instruct"
+input_cost_per_token = 0.00000035
+output_cost_per_token = 0.0000004
+capabilities = ["reasoning", "general"]
 
-# --- Local proposers (free) for the cost-sweet-spot fusion config. ---
+[[models]]
+name = "llama-70b"
+model = "openrouter/meta-llama/llama-3.3-70b-instruct"
+input_cost_per_token = 0.0000003
+output_cost_per_token = 0.0000004
+capabilities = ["general", "reasoning"]
+
+# ---------- Local (free proposers for the cheap recipes) ----------
 [[models]]
 name = "llama3.2"
 model = "ollama/llama3.2"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["general", "chat"]
 
 [[models]]
 name = "qwen2.5-coder"
@@ -35,16 +86,38 @@ model = "ollama/qwen2.5-coder:7b"
 api_base = "http://localhost:11434"
 input_cost_per_token = 0.0
 output_cost_per_token = 0.0
+capabilities = ["code", "reasoning"]
 
-# Default fusion = local proposers + ONE frontier aggregator (the cheap config
-# most likely to beat a single frontier model). Swap proposers to frontier ids
-# for a full hosted-MoA comparison.
+# ---------- Recipes (the "us" side) ----------
 [fusion]
-proposers = ["llama3.2", "qwen2.5-coder"]
-aggregator = "gpt-4o"
+# Diverse strong-open proposers, synthesized by the strongest model.
+proposers = ["deepseek", "qwen-72b", "llama-70b"]
+aggregator = "opus"
 layers = 1
 
+[router]
+default = "haiku"
+[[router.rules]]
+match = "code|function|algorithm|def |class |implement|array|sort"
+model = "deepseek"
+[[router.rules]]
+match = "math|calculate|sum|equation|number|prove|probability"
+model = "qwen-72b"
+
+[cascade]
+# Cheapest frontier first; escalate only when the critic isn't confident.
+tiers = ["haiku", "gpt-4o", "opus"]
+critic = "haiku"
+threshold = 0.7
+
+[bestofn]
+# Sample the cheap-strong-open basket; verifier (eval) or critic picks the winner.
+models = ["deepseek", "qwen-72b", "llama-70b", "gpt-4o-mini"]
+n = 4
+critic = "haiku"
+temperature = 0.7
+
 [budget]
-# Real spend — keep tight. Caps fire BEFORE any call.
-per_request_usd = 0.20
-total_usd = 20.0
+# HARD cap — enforced before any call fires. Control real spend with -n.
+per_request_usd = 0.50
+total_usd = 25.0
