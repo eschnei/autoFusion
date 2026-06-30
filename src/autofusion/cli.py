@@ -10,6 +10,7 @@ Commands:
   bestofn "prompt"      sample N candidates, a verifier/critic picks the best (Phase 9)
   eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
   optimize --benchmark  sweep recipes over available models -> quality×cost frontier
+  report  --benchmarks  recipes vs all available models across tasks -> scoreboard
   budget  status        show the configured budget caps
 """
 
@@ -222,6 +223,20 @@ def _cmd_optimize(args) -> int:
     return 0
 
 
+def _cmd_report(args) -> int:
+    from .report import render_report, run_report
+
+    cfg = load_config(args.config)
+    benchmarks = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
+    print(f"building report across {len(benchmarks)} tasks ({', '.join(benchmarks)}), "
+          f"limit={args.limit}...\n")
+    rows, available = asyncio.run(
+        run_report(cfg, benchmarks, limit=args.limit, concurrency=args.concurrency)
+    )
+    print(render_report(rows, benchmarks, available))
+    return 0
+
+
 def _cmd_serve(args) -> int:
     import uvicorn
 
@@ -297,13 +312,18 @@ def main(argv: list[str] | None = None) -> int:
     p_opt.add_argument("-n", "--limit", type=int, default=None, help="limit number of tasks")
     p_opt.add_argument("--concurrency", type=int, default=4)
 
+    p_report = sub.add_parser("report", help="recipes vs all models across tasks")
+    p_report.add_argument("--benchmarks", default="humaneval,gsm8k", help="comma-separated")
+    p_report.add_argument("-n", "--limit", type=int, default=None, help="limit tasks per benchmark")
+    p_report.add_argument("--concurrency", type=int, default=4)
+
     args = parser.parse_args(argv)
     handlers = {
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
         "bestofn": _cmd_bestofn, "eval": _cmd_eval, "optimize": _cmd_optimize,
-        "budget": _cmd_budget, "serve": _cmd_serve,
+        "report": _cmd_report, "budget": _cmd_budget, "serve": _cmd_serve,
     }
     try:
         return handlers[args.command](args)
