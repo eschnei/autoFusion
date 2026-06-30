@@ -14,8 +14,9 @@ is exactly the "quality delta AND cost multiple" the brief demands.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .budget import BudgetTracker, estimate_request_cost
 from .config import Config, ModelSpec
@@ -125,9 +126,34 @@ class Fusion:
         )
 
 
+@dataclass
+class Router:
+    """Picks ONE model per request via ordered regex rules over the prompt, else a
+    default. Heuristic (free, transparent); classifier/LLM-judge routing deferred.
+    Bounded by the best single model — the cheap complement to fusion."""
+
+    default: ModelSpec
+    rules: list[tuple[re.Pattern, ModelSpec]] = field(default_factory=list)
+    name: str = "route"
+
+    def select(self, messages: list[Message]) -> ModelSpec:
+        text = " ".join(m.get("content", "") for m in messages if m.get("role") == "user")
+        for pattern, spec in self.rules:
+            if pattern.search(text):
+                return spec
+        return self.default
+
+    async def run(
+        self, messages: list[Message], budget: BudgetTracker | None = None, **kw
+    ) -> CompletionResult:
+        # The result's `model` is the chosen model (handy for the `route` CLI);
+        # the eval harness labels the run by this strategy's name instead.
+        return await _guarded_acomplete(self.select(messages), messages, budget, **kw)
+
+
 def resolve_strategy(config: Config, name: str):
     """Map a CLI name to a Strategy. A configured model -> SingleModel;
-    the literal "fusion" -> Fusion built from the [fusion] config block."""
+    "fusion" -> Fusion from [fusion]; "route" -> Router from [router]."""
     if name in config.models:
         return SingleModel(config.model(name))
     if name == "fusion":
@@ -139,5 +165,13 @@ def resolve_strategy(config: Config, name: str):
             aggregator=config.model(f.aggregator),
             layers=f.layers,
         )
-    known = ", ".join(sorted(config.models)) + ", fusion"
+    if name == "route":
+        r = config.router
+        if not r.default:
+            raise ValueError("[router] config needs a default model")
+        return Router(
+            default=config.model(r.default),
+            rules=[(re.compile(p, re.IGNORECASE), config.model(m)) for p, m in r.rules],
+        )
+    known = ", ".join(sorted(config.models)) + ", fusion, route"
     raise KeyError(f"unknown strategy '{name}'. Available: {known}")
