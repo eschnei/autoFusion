@@ -19,3 +19,8 @@ build/
 results/
 .cache/
 *.log
+
+# autoDev engine scaffolding (operational, not part of the package)
+.claude/
+.autodev/
+scripts/autodev/
