@@ -6,10 +6,11 @@ a model's raw text output deterministically. No LLM judge.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
-from .sandbox import run_python
+from .sandbox import run_python, run_with_stdin
 
 Message = dict[str, str]
 
@@ -94,7 +95,73 @@ class HumanEval:
         return ScoreResult(result.passed, result.detail)
 
 
-BENCHMARKS = {HumanEval.name: HumanEval}
+def _normalize_output(s: str) -> str:
+    """Trailing-whitespace-insensitive stdout comparison."""
+    return "\n".join(line.rstrip() for line in s.strip().splitlines())
+
+
+class LiveCodeBench:
+    """LiveCodeBench (code_generation_lite) — contamination-resistant competitive
+    programming. Frontier models score ~50-70%, so unlike HumanEval there's real
+    headroom to detect a fusion gain.
+
+    Loaded directly from the repo's test*.jsonl (the HF loading script is
+    incompatible with datasets 3.x). v1 grades stdin/stdout problems on their
+    PUBLIC test cases; functional (LeetCode-style) problems are skipped and the
+    count is logged — comparative validity holds since every strategy faces the
+    identical tests.
+    """
+
+    name = "livecodebench"
+
+    _SYSTEM = (
+        "You are an expert competitive programmer. Write a COMPLETE Python 3 program "
+        "that reads from standard input and writes the answer to standard output. "
+        "Return ONLY the program in a single ```python code block — no explanation."
+    )
+
+    def load(self, limit: int | None = None, data_file: str = "test.jsonl") -> list[Task]:
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download("livecodebench/code_generation_lite", data_file, repo_type="dataset")
+        tasks: list[Task] = []
+        skipped = 0
+        with open(path) as fh:
+            for line in fh:
+                rec = json.loads(line)
+                public = json.loads(rec["public_test_cases"])
+                stdin_tests = [t for t in public if t.get("testtype") == "stdin"]
+                if not stdin_tests:  # functional/LeetCode — out of scope for v1
+                    skipped += 1
+                    continue
+                tasks.append(
+                    Task(
+                        task_id=rec["question_id"],
+                        messages=[
+                            {"role": "system", "content": self._SYSTEM},
+                            {"role": "user", "content": rec["question_content"]},
+                        ],
+                        meta={"tests": stdin_tests, "difficulty": rec.get("difficulty")},
+                    )
+                )
+                if limit is not None and len(tasks) >= limit:
+                    break
+        if skipped:
+            print(f"[livecodebench] skipped {skipped} non-stdin (functional) problems")
+        return tasks
+
+    def score(self, task: Task, output: str) -> ScoreResult:
+        code = extract_code(output)
+        for i, test in enumerate(task.meta["tests"]):
+            result = run_with_stdin(code, test["input"], timeout=10.0)
+            if result.timed_out:
+                return ScoreResult(False, f"timeout on test {i}")
+            if _normalize_output(result.stdout) != _normalize_output(test["output"]):
+                return ScoreResult(False, f"wrong output on test {i}")
+        return ScoreResult(True, "passed")
+
+
+BENCHMARKS = {HumanEval.name: HumanEval, LiveCodeBench.name: LiveCodeBench}
 
 
 def get_benchmark(name: str):
