@@ -424,6 +424,58 @@ def _cmd_agenteval(args) -> int:
     return 0
 
 
+def _cmd_swebench(args) -> int:
+    from pathlib import Path
+
+    from .eval import swebench as swe
+
+    cfg = load_config(args.config)
+    spec = cfg.model(args.model)
+    budget = BudgetTracker.from_config(cfg.budget)
+    ids = [i.strip() for i in args.ids.split(",") if i.strip()] or None
+    print(f"SWE-bench predict | model: {spec.name} | dataset: {args.dataset} | "
+          f"{f'ids: {len(ids)}' if ids else f'n: {args.limit}'} | max-steps: {args.max_steps}")
+    print("  (checkout repo@base_commit -> agent edits -> git diff -> official-format patch)\n")
+    instances = swe.load_instances(args.dataset, limit=args.limit, ids=ids)
+    if not instances:
+        print("no instances matched.", file=sys.stderr)
+        return 1
+    preds = asyncio.run(swe.predict(
+        spec, instances, budget=budget, max_steps=args.max_steps, concurrency=args.concurrency))
+    for p in preds:
+        size = len(p.model_patch.splitlines())
+        print(f"  {p.instance_id:<28}{'patch: %d lines' % size if p.model_patch.strip() else 'EMPTY (no edit)':<22}"
+              f"  ${p.cost_usd:.4f}")
+    path = swe.write_predictions(preds, args.predictions)
+    n_empty = sum(1 for p in preds if not p.model_patch.strip())
+    print(f"\nwrote {len(preds)} predictions -> {path}  "
+          f"({len(preds) - n_empty} non-empty, ${sum(p.cost_usd for p in preds):.4f})")
+
+    if not args.grade:
+        print("\nto grade on Docker (needs `pip install swebench` + Docker running):\n"
+              f"  autofusion swebench -m {spec.name} --ids {','.join(p.instance_id for p in preds)} "
+              "--grade   # (reuses these predictions if you pass --predictions)")
+        return 0
+
+    print(f"\ngrading via the official swebench Docker harness (run_id={args.run_id})...")
+    proc = swe.grade(path, args.run_id, dataset=args.dataset,
+                     ids=[p.instance_id for p in preds], max_workers=args.max_workers)
+    if proc.returncode != 0:
+        print(proc.stdout[-1500:] + "\n" + proc.stderr[-1500:], file=sys.stderr)
+        print("grading harness exited non-zero (is Docker running? is `swebench` installed?)",
+              file=sys.stderr)
+        return 1
+    # the harness writes "<model_name_or_path>.<run_id>.json" in the cwd
+    report = Path(f"{preds[0].model_name_or_path}.{args.run_id}.json")
+    if not report.exists():
+        print(f"harness finished but report {report} not found; check its output.", file=sys.stderr)
+        return 1
+    summary = swe.parse_report(report)
+    print(f"\nRESOLVED {summary['resolved']}/{summary['submitted']}  "
+          f"(errors {summary['errors']})  |  resolved: {', '.join(summary['resolved_ids']) or '—'}")
+    return 0
+
+
 def _cmd_eval(args) -> int:
     from .eval.results import render_leaderboard, save_run
     from .eval.runner import run_baseline
@@ -521,11 +573,23 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("recipes", help="show the learned per-category recipes")
 
     p_ae = sub.add_parser("agenteval", help="score agent recipes on a local bug-fix suite")
-    p_ae.add_argument("--recipes", default="single:deepseek,bestof:3,cascade",
-                      help="comma-separated: single:<model>, bestof:<N>, cascade")
+    p_ae.add_argument("--recipes", default="single:deepseek,bestof:3,cascade,delegate",
+                      help="comma-separated: single:<m>, bestof:<N>[+m..], cascade[+t..], delegate[:lead+sidekick]")
     p_ae.add_argument("-n", "--limit", type=int, default=None, help="limit number of tasks")
     p_ae.add_argument("--max-steps", type=int, default=15)
     p_ae.add_argument("--concurrency", type=int, default=4)
+
+    p_swe = sub.add_parser("swebench", help="SWE-bench slice: agent -> patch (predict), Docker (grade)")
+    p_swe.add_argument("-m", "--model", required=True, help="agent model for prediction")
+    p_swe.add_argument("--dataset", default="princeton-nlp/SWE-bench_Lite")
+    p_swe.add_argument("-n", "--limit", type=int, default=1, help="number of instances")
+    p_swe.add_argument("--ids", default="", help="comma-separated instance_ids (overrides -n)")
+    p_swe.add_argument("--predictions", default="swebench_preds.jsonl", help="output predictions path")
+    p_swe.add_argument("--max-steps", type=int, default=30)
+    p_swe.add_argument("--concurrency", type=int, default=3)
+    p_swe.add_argument("--grade", action="store_true", help="also run the official Docker grader")
+    p_swe.add_argument("--run-id", default="autofusion-swe", help="swebench harness run id")
+    p_swe.add_argument("--max-workers", type=int, default=2, help="Docker grading workers")
 
     args = parser.parse_args(argv)
     handlers = {
@@ -533,7 +597,7 @@ def main(argv: list[str] | None = None) -> int:
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
         "bestofn": _cmd_bestofn, "auto": _cmd_auto, "code": _cmd_code, "agent": _cmd_agent,
-        "eval": _cmd_eval, "agenteval": _cmd_agenteval,
+        "eval": _cmd_eval, "agenteval": _cmd_agenteval, "swebench": _cmd_swebench,
         "optimize": _cmd_optimize, "report": _cmd_report,
         "learn": _cmd_learn, "recipes": _cmd_recipes,
         "budget": _cmd_budget, "serve": _cmd_serve,

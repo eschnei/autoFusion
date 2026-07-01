@@ -279,3 +279,77 @@ async def cascade_agents(
             shutil.rmtree(t.workspace, ignore_errors=True)
     total = sum(t.result.cost_usd for t in attempts)
     return BestOfResult(trajectories=attempts, winner=winner, total_cost=total)
+
+
+# --------------------------------------------------------------------------- #
+# Phase D — delegation (lead plans + reviews, cheap sidekick edits)
+# --------------------------------------------------------------------------- #
+
+LEAD_SYSTEM = (
+    "You are the LEAD engineer. You do NOT edit files yourself — a junior engineer "
+    "does. Read the task and the repository, then write a SHORT, concrete plan the "
+    "junior can execute: name the exact file(s) and the specific change(s) needed to "
+    "make the tests pass. If you're given a failing test's output from a previous "
+    "attempt, diagnose what went wrong and revise the plan. Keep it tight: a numbered "
+    "list of edits. Include a code snippet only when the exact change is essential."
+)
+
+
+@dataclass
+class DelegateResult:
+    passed: bool
+    total_cost: float
+    n_calls: int
+    rounds: int
+
+
+async def delegate_agents(
+    lead: ModelSpec, sidekick: ModelSpec, task: str, repo: str | Path, tests_cmd: str, *,
+    budget: BudgetTracker | None = None, max_steps: int = 20, max_rounds: int = 3,
+) -> DelegateResult:
+    """Devin-Fusion delegation: a strong `lead` plans (and reviews failures) on compact
+    context — repo tree + last test output, no file-editing itself — while a cheap
+    `sidekick` runs the agent loop to execute the plan. The bet: frontier-level
+    direction at a fraction of the cost, because the expensive model only reasons, and
+    the cheap model does the token-heavy editing. Iterates up to `max_rounds`."""
+    repo = Path(repo).resolve()
+    tmp = Path(tempfile.mkdtemp(prefix="af-deleg-"))
+    shutil.copytree(repo, tmp, dirs_exist_ok=True, ignore=_COPY_IGNORE)
+    ws = Workspace(tmp)
+    total_cost, n_calls, passed, last_test, rnd = 0.0, 0, False, "", 0
+
+    for rnd in range(1, max_rounds + 1):
+        plan_prompt = f"Task:\n{task}\n\nRepository files:\n{ws.tree()}"
+        if last_test:
+            plan_prompt += (f"\n\nA previous attempt still fails. Test output:\n{last_test}"
+                            "\n\nDiagnose the failure and revise the plan.")
+        lead_msgs = [{"role": "system", "content": LEAD_SYSTEM},
+                     {"role": "user", "content": plan_prompt}]
+        try:
+            resp = await litellm.acompletion(**_litellm_kwargs(lead, lead_msgs))
+        except Exception:  # noqa: BLE001 — a lead failure ends the round cleanly
+            break
+        n_calls += 1
+        cost = (resp._hidden_params or {}).get("response_cost") or 0.0
+        total_cost += cost
+        if budget:
+            budget.record(cost)
+        plan = resp.choices[0].message.content or ""
+
+        sk_task = (f"{task}\n\nYour lead engineer inspected the repo and gave you this "
+                   f"plan. Follow it exactly, then run the tests to confirm:\n\n{plan}")
+        res = await run_agent(sidekick, sk_task, ws, budget=budget, max_steps=max_steps)
+        total_cost += res.cost_usd
+        n_calls += res.n_calls
+
+        last_test = await asyncio.to_thread(ws.run, tests_cmd)
+        if last_test.startswith("exit 0"):
+            passed = True
+            break
+
+    try:
+        if passed:
+            shutil.copytree(tmp, repo, dirs_exist_ok=True, ignore=_COPY_IGNORE)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return DelegateResult(passed=passed, total_cost=total_cost, n_calls=n_calls, rounds=rnd)

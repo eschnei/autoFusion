@@ -21,7 +21,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..agent import Workspace, best_of_n_agents, cascade_agents, run_agent
+from ..agent import (
+    Workspace, best_of_n_agents, cascade_agents, delegate_agents, run_agent,
+)
 from ..budget import BudgetTracker
 from ..config import ModelSpec
 from .agentbench import AgentTask, get_suite
@@ -31,26 +33,56 @@ from .results import ModelRunResult, TaskOutcome
 @dataclass
 class Recipe:
     name: str          # the token, used as the leaderboard label
-    kind: str          # single | bestof | cascade
+    kind: str          # single | bestof | cascade | delegate
     specs: list[ModelSpec]
     n: int = 1
 
 
 def parse_recipe(cfg, token: str) -> Recipe:
-    """Turn a recipe token into a Recipe, drawing baskets/tiers from the config."""
+    """Turn a recipe token into a Recipe.
+
+    Baskets/tiers come from the config by default, but can be given inline with `+`
+    so an experiment (e.g. a cheap-ONLY basket vs a frontier single) is a one-liner:
+      single:<model>
+      bestof:<N>                      basket = [code].models or [bestofn].models
+      bestof:<N>+m1+m2+m3             basket = the listed models (overrides config)
+      cascade                         tiers  = [cascade].tiers
+      cascade+t1+t2+t3                tiers  = the listed models (cheapest-first)
+      delegate                        lead/sidekick from [delegate]
+      delegate:<lead>+<sidekick>      explicit lead + sidekick
+    """
     if token.startswith("single:"):
         return Recipe(token, "single", [cfg.model(token.split(":", 1)[1])])
+
     if token.startswith("bestof"):
-        n = int(token.replace("bestof", "").lstrip(":") or "3")
-        names = cfg.code.models or cfg.bestofn.models
+        body = token[len("bestof"):].lstrip(":")
+        parts = body.split("+")
+        n = int(parts[0]) if parts[0] else 3
+        names = parts[1:] or cfg.code.models or cfg.bestofn.models
         if not names:
-            raise ValueError("bestof recipe needs [code].models or [bestofn].models")
+            raise ValueError("bestof recipe needs an inline basket or [code]/[bestofn].models")
         return Recipe(token, "bestof", [cfg.model(m) for m in names], n=n)
-    if token == "cascade":
-        if not cfg.cascade.tiers:
-            raise ValueError("cascade recipe needs [cascade].tiers")
-        return Recipe(token, "cascade", [cfg.model(m) for m in cfg.cascade.tiers])
-    raise ValueError(f"unknown recipe '{token}' (use single:<model>, bestof:<N>, or cascade)")
+
+    if token == "cascade" or token.startswith("cascade+"):
+        names = token.split("+")[1:] or cfg.cascade.tiers
+        if not names:
+            raise ValueError("cascade recipe needs an inline tier list or [cascade].tiers")
+        return Recipe(token, "cascade", [cfg.model(m) for m in names])
+
+    if token == "delegate" or token.startswith("delegate:"):
+        if ":" in token:
+            pair = token.split(":", 1)[1].split("+")
+            if len(pair) != 2:
+                raise ValueError("delegate needs exactly lead+sidekick (e.g. delegate:opus+deepseek)")
+            lead, sidekick = pair
+        else:
+            lead, sidekick = cfg.delegate.lead, cfg.delegate.sidekick
+            if not (lead and sidekick):
+                raise ValueError("delegate recipe needs [delegate].lead + [delegate].sidekick")
+        return Recipe(token, "delegate", [cfg.model(lead), cfg.model(sidekick)])
+
+    raise ValueError(f"unknown recipe '{token}' "
+                     "(use single:<m>, bestof:<N>[+m..], cascade[+t..], or delegate[:lead+sidekick])")
 
 
 async def _run_one(recipe: Recipe, task: AgentTask, budget, max_steps: int) -> TaskOutcome:
@@ -63,6 +95,11 @@ async def _run_one(recipe: Recipe, task: AgentTask, budget, max_steps: int) -> T
             res = await run_agent(recipe.specs[0], task.prompt, ws, budget=budget, max_steps=max_steps)
             passed = (await asyncio.to_thread(ws.run, task.test_cmd)).startswith("exit 0")
             cost, calls, err = res.cost_usd, res.n_calls, res.error
+        elif recipe.kind == "delegate":
+            dr = await delegate_agents(
+                recipe.specs[0], recipe.specs[1], task.prompt, tmp, task.test_cmd,
+                budget=budget, max_steps=max_steps)
+            passed, cost, calls, err = dr.passed, dr.total_cost, dr.n_calls, None
         else:  # bestof / cascade both return a BestOfResult over `tmp`
             fn = best_of_n_agents if recipe.kind == "bestof" else cascade_agents
             kw = {"budget": budget, "max_steps": max_steps}
