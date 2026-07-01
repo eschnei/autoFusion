@@ -9,6 +9,7 @@ Commands:
   cascade "prompt"      cheap->critic->escalate cost cascade on one prompt (Phase 7)
   bestofn "prompt"      sample N candidates, a verifier/critic picks the best (Phase 9)
   code    "task"        write a solution file, verified by your test command (Phase 11)
+  agent   "task"        run a coding agent (read/edit/run) in a repo (Phase A)
   eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
   optimize --benchmark  sweep recipes over available models -> quality×cost frontier
   report  --benchmarks  recipes vs all available models across tasks -> scoreboard
@@ -200,6 +201,31 @@ def _cmd_bestofn(args) -> int:
     print(result.text)
     print(f"\n[{result.latency_s:.2f}s | {result.n_calls} calls | ${result.cost_usd:.6f}]")
     return 0
+
+
+def _cmd_agent(args) -> int:
+    from .agent import Workspace, run_agent
+
+    cfg = load_config(args.config)
+    model_name = args.model or cfg.categories.default
+    if not model_name:
+        print("error: pass --model (or set [categories].default)", file=sys.stderr)
+        return 2
+    spec = cfg.model(model_name)
+    ws = Workspace(args.repo)
+    budget = BudgetTracker.from_config(cfg.budget)
+    print(f"-> agent | model: {spec.name} | repo: {ws.root} | max-steps: {args.max_steps}")
+    print("  (the agent reads/edits files and runs commands in the repo)\n")
+    result = asyncio.run(run_agent(spec, args.task, ws, budget=budget, max_steps=args.max_steps))
+    if result.error:
+        print(f"agent stopped: {result.error}", file=sys.stderr)
+    print(f"\n{result.summary}\n")
+    verdict = ""
+    if args.tests:
+        verdict = " | tests: " + ("PASS ✓" if ws.run(args.tests).startswith("exit 0") else "FAIL ✗")
+    print(f"[{result.steps} steps | {result.n_calls} calls | ${result.cost_usd:.4f}"
+          f" | {'finished' if result.finished else 'incomplete'}{verdict}]")
+    return 0 if result.finished and not result.error else 1
 
 
 def _cmd_auto(args) -> int:
@@ -398,6 +424,13 @@ def main(argv: list[str] | None = None) -> int:
     p_auto = sub.add_parser("auto", help="classify the task, route to its best recipe")
     p_auto.add_argument("prompt", help="the prompt to route by category")
 
+    p_agent = sub.add_parser("agent", help="run a coding agent in a repo")
+    p_agent.add_argument("task", help="what the agent should do")
+    p_agent.add_argument("-r", "--repo", default=".", help="repo/workspace directory")
+    p_agent.add_argument("-m", "--model", default="", help="agent model (default: [categories].default)")
+    p_agent.add_argument("-t", "--tests", default="", help="test command to verify at the end")
+    p_agent.add_argument("--max-steps", type=int, default=20)
+
     p_code = sub.add_parser("code", help="write a verified solution file")
     p_code.add_argument("task", help="what to build")
     p_code.add_argument("-f", "--file", default="solution.py", help="target file to write")
@@ -445,7 +478,8 @@ def main(argv: list[str] | None = None) -> int:
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
-        "bestofn": _cmd_bestofn, "auto": _cmd_auto, "code": _cmd_code, "eval": _cmd_eval,
+        "bestofn": _cmd_bestofn, "auto": _cmd_auto, "code": _cmd_code, "agent": _cmd_agent,
+        "eval": _cmd_eval,
         "optimize": _cmd_optimize, "report": _cmd_report,
         "learn": _cmd_learn, "recipes": _cmd_recipes,
         "budget": _cmd_budget, "serve": _cmd_serve,
