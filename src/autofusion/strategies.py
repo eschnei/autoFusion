@@ -366,14 +366,21 @@ def resolve_strategy(config: Config, name: str):
             temperature=b.temperature,
         )
     if name == "auto":
+        from .recipe_cache import load_recipes
+
         cats = config.categories
         if not cats.default:
             raise ValueError("[categories] config needs a default strategy")
-        forbidden = {"auto"}
+        learned = load_recipes(config)  # {category: {"recipe": ...}}
+
+        def pick(category: str, fallback: str) -> str:
+            recipe = learned.get(category, {}).get("recipe", fallback)
+            return fallback if recipe == "auto" else recipe  # never self-route
+
         return CategoryRouter(
-            default=resolve_strategy(config, cats.default),
-            rules=[(re.compile(p, re.IGNORECASE), resolve_strategy(config, s))
-                   for p, s in cats.rules if s not in forbidden],
+            default=resolve_strategy(config, pick("default", cats.default)),
+            rules=[(re.compile(pat, re.IGNORECASE), resolve_strategy(config, pick(cat, strat)))
+                   for cat, pat, strat in cats.rules],
         )
     known = ", ".join(sorted(config.models)) + ", fusionMarj, routeMarj, cascadeMarj, bestofMarj, auto"
     raise KeyError(f"unknown strategy '{name}'. Available: {known}")
