@@ -8,7 +8,31 @@ A single frontier model commits to one draw from its distribution and inherits i
 
 autoFusion is the self-hostable version of that. **The code is free; you bring your own API keys** — or run fully local via [Ollama](https://ollama.com) for a true **$0 path**. We don't claim fusion is better; the built-in eval harness lets you measure it on your own tasks, including against the **aggregator running alone** (the honest baseline).
 
-**Not a router.** A router picks *one* model per task — cheaper, but bounded by the best single model. Fusion runs several and synthesizes. Routing is deferred to a later phase.
+**More than a router.** A router picks *one* model per task — cheaper, but bounded by the best single model. Fusion runs several and synthesizes; verify-and-select samples several and lets a test pick the winner. Both ship today (`routeMarj`, `fusionMarj`, `bestofMarj`, `cascadeMarj`).
+
+## Early results (measured, not asserted)
+
+Small-*n*, held-out, directional — a thermometer, not a verdict. But the pattern is already clear: **on work you can check, fused recipes reach frontier quality for a fraction of the cost; on open reasoning, the frontier still leads.**
+
+### Hard coding — where verify-and-select shines
+
+![Hard coding — LiveCodeBench: fusionMarj and Opus 100%, bestofMarj 90%, cascadeMarj and DeepSeek 80%, GPT-4o 40%](docs/assets/livecodebench_bars.png)
+
+On LiveCodeBench (contamination-resistant, **private held-out grading**, n=10) the autoFusion recipes land shoulder-to-shoulder with Opus 4.8 — `fusionMarj` ties it at 100%, `bestofMarj` reaches 90% — while GPT-4o alone manages 40%.
+
+### Same quality, a fraction of the cost
+
+![Quality vs. cost per task — bestofMarj reaches near-Opus quality at ~8× lower cost](docs/assets/quality_vs_cost.png)
+
+The headline: **`bestofMarj` reaches near-Opus quality at ~8× lower cost per task.** The verifier (the tests) does the work you'd otherwise pay a bigger model for.
+
+### The honest boundary — coding vs. reasoning
+
+![Where recipes win and where frontier leads — coding vs. reasoning](docs/assets/axes_compare.png)
+
+Coding is *verifiable*, so verify-and-select wins. Reasoning (MMLU-Pro) has no test to select on — so the frontier keeps its edge. We show both, because the boundary **is** the finding.
+
+> **Caveats, stated plainly:** n=10 (coding) / n=20 (reasoning); LiveCodeBench is graded on held-out private tests — an earlier "bestofMarj 100%" was verifier=grader inflation, since fixed. These are early numbers meant to show *direction*, not a final leaderboard.
 
 ## The honest cost story
 
@@ -16,12 +40,14 @@ Fusion is **N+1 calls per request** (N proposers + 1 aggregation). It can silent
 
 ## Status
 
-Early build. Implemented:
+Working end-to-end, local-$0 by default. Built so far:
 
-- **Phase 0** — config + provider plumbing via [LiteLLM](https://github.com/BerriAI/litellm) (100+ providers + local Ollama through one interface).
-- **Phase 1** — eval harness ("the thermometer"): HumanEval loader, deterministic sandboxed pass@1 scoring, per-model baseline runner with cost + latency, leaderboard.
+- **Plumbing + eval harness** — [LiteLLM](https://github.com/BerriAI/litellm) providers + local Ollama through one interface; deterministic sandboxed pass@1 scoring; per-model **and** per-recipe leaderboard ("the thermometer").
+- **Recipes** — `fusionMarj` (MoA), `bestofMarj` (verify-and-select), `routeMarj`, `cascadeMarj`, and `delegate` (lead + sidekick) — all scored by the same eval.
+- **Benchmarks** — HumanEval, LiveCodeBench (held-out private grading), GSM8K, MMLU-Pro; a cross-task `report` and a recipe `optimize` sweep over the quality×cost frontier.
+- **Agentic** — a tool-using agent loop, best-of-N trajectories, a local bug-fix suite, and a SWE-bench predict→grade harness.
 
-Next: Phase 2 minimal fusion (MoA), Phase 3 calibration, Phase 4 CLI/budget/endpoint. See [`fusion-harness-build-brief.md`](fusion-harness-build-brief.md).
+The numbers above are early and directional. See [`fusion-harness-build-brief.md`](fusion-harness-build-brief.md).
 
 ## Quickstart
 
