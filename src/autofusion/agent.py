@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -84,8 +85,12 @@ class Workspace:
         return f"edited {path}"
 
     def run(self, command: str, timeout: float = 60.0) -> str:
+        # Disable .pyc caching: an edit + immediate re-run can leave a stale
+        # bytecode cache when the fix is the same byte-length as the bug and the
+        # writes land in the same mtime-second — a silent false negative.
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
         try:
-            proc = subprocess.run(command, shell=True, cwd=self.root,
+            proc = subprocess.run(command, shell=True, cwd=self.root, env=env,
                                   capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return f"timeout after {timeout}s"
@@ -242,3 +247,35 @@ async def best_of_n_agents(
             shutil.rmtree(t.workspace, ignore_errors=True)
     total = sum(t.result.cost_usd for t in trajectories)
     return BestOfResult(trajectories=list(trajectories), winner=winner, total_cost=total)
+
+
+async def cascade_agents(
+    tiers: list[ModelSpec], task: str, repo: str | Path, tests_cmd: str, *,
+    budget: BudgetTracker | None = None, max_steps: int = 20,
+) -> BestOfResult:
+    """Escalating cascade: run the cheapest agent first; if its tests fail, escalate
+    to the next tier, and so on. Stop at the first tier whose tests pass and apply
+    it back to the repo. The cost saver — cheap models handle the easy bugs (1×),
+    only the hard ones pay for a stronger model. Each tier runs on a fresh copy so
+    a failed attempt never poisons the next tier's starting point."""
+    repo = Path(repo).resolve()
+    attempts: list[Trajectory] = []
+    winner: Trajectory | None = None
+    for spec in tiers:
+        tmp = Path(tempfile.mkdtemp(prefix="af-casc-"))
+        shutil.copytree(repo, tmp, dirs_exist_ok=True, ignore=_COPY_IGNORE)
+        ws = Workspace(tmp)
+        result = await run_agent(spec, task, ws, budget=budget, max_steps=max_steps)
+        passed = (await asyncio.to_thread(ws.run, tests_cmd)).startswith("exit 0")
+        attempts.append(Trajectory(model=spec.name, workspace=str(tmp), result=result, passed=passed))
+        if passed:
+            winner = attempts[-1]
+            break  # cheapest tier that works wins — don't pay for stronger ones
+    try:
+        if winner:
+            shutil.copytree(winner.workspace, repo, dirs_exist_ok=True, ignore=_COPY_IGNORE)
+    finally:
+        for t in attempts:
+            shutil.rmtree(t.workspace, ignore_errors=True)
+    total = sum(t.result.cost_usd for t in attempts)
+    return BestOfResult(trajectories=attempts, winner=winner, total_cost=total)
