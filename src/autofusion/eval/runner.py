@@ -17,11 +17,15 @@ from .results import ModelRunResult, TaskOutcome
 
 
 async def _run_one(strategy, task: Task, benchmark, sem: asyncio.Semaphore, budget) -> TaskOutcome:
-    # Strategies that select among candidates (best-of-N) get the real verifier:
-    # the benchmark's own scorer for this task. Others never see it.
+    # A best-of-N strategy may select using a HELD-OUT verifier the benchmark
+    # exposes (e.g. LiveCodeBench public tests) — never the grader itself. If the
+    # benchmark provides none (HumanEval/GSM8K/MMLU-Pro), it falls back to a critic.
     extra = {}
     if getattr(strategy, "needs_verifier", False):
-        extra["verify"] = lambda text, _t=task: benchmark.score(_t, text).passed
+        hv = getattr(benchmark, "held_out_verifier", None)
+        verify = hv(task) if hv else None
+        if verify is not None:
+            extra["verify"] = verify
     async with sem:
         completion = await strategy.run(task.messages, budget=budget, temperature=0.0, **extra)
     if not completion.ok:

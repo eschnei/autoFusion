@@ -100,16 +100,29 @@ def _normalize_output(s: str) -> str:
     return "\n".join(line.rstrip() for line in s.strip().splitlines())
 
 
+def _decode_private_tests(raw: str) -> list:
+    """LiveCodeBench compresses private tests as base64(zlib(pickle(...)))."""
+    import base64
+    import pickle
+    import zlib
+
+    try:
+        return json.loads(raw)  # some rows are plain JSON
+    except Exception:
+        # Trusted, widely-used benchmark dataset; pickle is how it ships.
+        dec = pickle.loads(zlib.decompress(base64.b64decode(raw.encode("utf-8"))))
+        return json.loads(dec) if isinstance(dec, str) else dec
+
+
 class LiveCodeBench:
     """LiveCodeBench (code_generation_lite) — contamination-resistant competitive
-    programming. Frontier models score ~50-70%, so unlike HumanEval there's real
-    headroom to detect a fusion gain.
+    programming. Frontier models score ~50-70%, so there's real headroom.
 
-    Loaded directly from the repo's test*.jsonl (the HF loading script is
-    incompatible with datasets 3.x). v1 grades stdin/stdout problems on their
-    PUBLIC test cases; functional (LeetCode-style) problems are skipped and the
-    count is logged — comparative validity holds since every strategy faces the
-    identical tests.
+    FAIR grading: score() runs the **private/held-out** tests, while
+    `held_out_verifier` exposes only the **public** tests — so a verify-and-select
+    strategy (bestofMarj) picks on public tests but is graded on hidden ones,
+    exactly like the real benchmark. stdin/stdout problems only (functional
+    problems skipped + logged).
     """
 
     name = "livecodebench"
@@ -129,11 +142,13 @@ class LiveCodeBench:
         with open(path) as fh:
             for line in fh:
                 rec = json.loads(line)
-                public = json.loads(rec["public_test_cases"])
-                stdin_tests = [t for t in public if t.get("testtype") == "stdin"]
-                if not stdin_tests:  # functional/LeetCode — out of scope for v1
+                public = [t for t in json.loads(rec["public_test_cases"])
+                          if t.get("testtype") == "stdin"]
+                if not public:  # functional/LeetCode — out of scope
                     skipped += 1
                     continue
+                private = [t for t in _decode_private_tests(rec["private_test_cases"])
+                           if t.get("testtype") == "stdin"]
                 tasks.append(
                     Task(
                         task_id=rec["question_id"],
@@ -141,7 +156,8 @@ class LiveCodeBench:
                             {"role": "system", "content": self._SYSTEM},
                             {"role": "user", "content": rec["question_content"]},
                         ],
-                        meta={"tests": stdin_tests, "difficulty": rec.get("difficulty")},
+                        meta={"public": public, "private": private,
+                              "difficulty": rec.get("difficulty")},
                     )
                 )
                 if limit is not None and len(tasks) >= limit:
@@ -150,15 +166,30 @@ class LiveCodeBench:
             print(f"[livecodebench] skipped {skipped} non-stdin (functional) problems")
         return tasks
 
-    def score(self, task: Task, output: str) -> ScoreResult:
-        code = extract_code(output)
-        for i, test in enumerate(task.meta["tests"]):
+    @staticmethod
+    def _run_suite(code: str, tests: list) -> tuple[bool, str]:
+        for i, test in enumerate(tests):
             result = run_with_stdin(code, test["input"], timeout=10.0)
             if result.timed_out:
-                return ScoreResult(False, f"timeout on test {i}")
+                return False, f"timeout on test {i}"
             if _normalize_output(result.stdout) != _normalize_output(test["output"]):
-                return ScoreResult(False, f"wrong output on test {i}")
-        return ScoreResult(True, "passed")
+                return False, f"wrong output on test {i}"
+        return True, "passed"
+
+    def score(self, task: Task, output: str) -> ScoreResult:
+        # Grade on the HELD-OUT private tests (fall back to public if none shipped).
+        tests = task.meta["private"] or task.meta["public"]
+        passed, detail = self._run_suite(extract_code(output), tests)
+        return ScoreResult(passed, detail)
+
+    def held_out_verifier(self, task: Task):
+        """The selection verifier a best-of-N strategy may use: PUBLIC tests only."""
+        public = task.meta["public"]
+
+        def verify(model_output: str) -> bool:
+            return self._run_suite(extract_code(model_output), public)[0]
+
+        return verify
 
 
 def _extract_last_number(text: str) -> str | None:
@@ -210,10 +241,63 @@ class GSM8K:
         return ScoreResult(ok, "passed" if ok else f"failed: got {pred}, want {task.meta['gold']}")
 
 
+def _extract_choice_letter(text: str) -> str | None:
+    """Pull the answer letter (A–J) from a model reply — prefers an explicit
+    'answer is X', falls back to the last standalone letter."""
+    m = re.findall(r"answer\W*(?:is|:)?\s*\(?([A-J])\)?", text, re.IGNORECASE)
+    if m:
+        return m[-1].upper()
+    m = re.findall(r"\b([A-J])\b", text)
+    return m[-1].upper() if m else None
+
+
+class MMLUPro:
+    """MMLU-Pro — hard, 10-option multiple-choice across disciplines. The reasoning
+    axis: single-turn, deterministic letter grading, not saturated (frontier
+    ~70-85%). No test-verifier, so a best-of-N strategy falls back to its critic."""
+
+    name = "mmlu-pro"
+
+    _SYSTEM = (
+        "You are an expert answering a hard multiple-choice question. Reason briefly, "
+        "then end with a line of exactly: 'The answer is X.' where X is the option letter."
+    )
+
+    def load(self, limit: int | None = None) -> list[Task]:
+        from datasets import load_dataset
+
+        rows = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
+        if limit is not None:
+            rows = rows.select(range(min(limit, len(rows))))
+        tasks: list[Task] = []
+        for i, row in enumerate(rows):
+            letters = [chr(65 + j) for j in range(len(row["options"]))]
+            body = "\n".join(f"{L}) {o}" for L, o in zip(letters, row["options"]))
+            tasks.append(
+                Task(
+                    task_id=f"mmlu-pro/{row.get('question_id', i)}",
+                    messages=[
+                        {"role": "system", "content": self._SYSTEM},
+                        {"role": "user", "content": f"{row['question']}\n\n{body}"},
+                    ],
+                    meta={"gold": row["answer"]},  # the correct option letter
+                )
+            )
+        return tasks
+
+    def score(self, task: Task, output: str) -> ScoreResult:
+        pred = _extract_choice_letter(output)
+        if pred is None:
+            return ScoreResult(False, "failed: no letter in output")
+        ok = pred == task.meta["gold"]
+        return ScoreResult(ok, "passed" if ok else f"failed: got {pred}, want {task.meta['gold']}")
+
+
 BENCHMARKS = {
     HumanEval.name: HumanEval,
     LiveCodeBench.name: LiveCodeBench,
     GSM8K.name: GSM8K,
+    MMLUPro.name: MMLUPro,
 }
 
 
