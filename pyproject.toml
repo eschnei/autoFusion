@@ -31,5 +31,6 @@ packages = ["src/autofusion"]
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "matplotlib>=3.11.0",
     "pytest>=8.0",
 ]
