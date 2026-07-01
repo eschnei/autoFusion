@@ -124,6 +124,16 @@ critic = "haiku"
 n = 4
 temperature = 0.7
 
+[categories]
+# `auto`: classify the task, route to the recipe our data says wins per category.
+default = "opus"                       # reasoning/writing — frontier leads
+[[categories.rules]]
+match = "code|function|def |class |implement|algorithm|bug|refactor|program|script"
+strategy = "bestofMarj"                 # verifiable code — verify-and-select wins
+[[categories.rules]]
+match = "math|calculate|equation|prove|probability|arithmetic|compute"
+strategy = "routeMarj"
+
 [budget]
 # HARD cap — enforced before any call fires. Control real spend with -n.
 per_request_usd = 0.50

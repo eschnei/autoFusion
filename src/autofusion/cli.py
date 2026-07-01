@@ -202,6 +202,25 @@ def _cmd_bestofn(args) -> int:
     return 0
 
 
+def _cmd_auto(args) -> int:
+    cfg = load_config(args.config)
+    strategy = resolve_strategy(cfg, "auto")
+    budget = BudgetTracker.from_config(cfg.budget)
+    msgs = [{"role": "user", "content": args.prompt}]
+    print(f"-> auto | classified to: {strategy.select(msgs).name}\n")
+    try:
+        result = asyncio.run(strategy.run(msgs, budget=budget))
+    except BudgetExceeded as exc:
+        print(f"budget cap hit: {exc}", file=sys.stderr)
+        return 2
+    if not result.ok:
+        print(f"ERROR: {result.error}", file=sys.stderr)
+        return 1
+    print(result.text)
+    print(f"\n[{result.latency_s:.2f}s | {result.n_calls} calls | ${result.cost_usd:.6f}]")
+    return 0
+
+
 def _cmd_code(args) -> int:
     from pathlib import Path
 
@@ -332,6 +351,9 @@ def main(argv: list[str] | None = None) -> int:
     p_bestofn = sub.add_parser("bestofn", help="sample N candidates, pick the best")
     p_bestofn.add_argument("prompt", help="the prompt to sample")
 
+    p_auto = sub.add_parser("auto", help="classify the task, route to its best recipe")
+    p_auto.add_argument("prompt", help="the prompt to route by category")
+
     p_code = sub.add_parser("code", help="write a verified solution file")
     p_code.add_argument("task", help="what to build")
     p_code.add_argument("-f", "--file", default="solution.py", help="target file to write")
@@ -371,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
-        "bestofn": _cmd_bestofn, "code": _cmd_code, "eval": _cmd_eval,
+        "bestofn": _cmd_bestofn, "auto": _cmd_auto, "code": _cmd_code, "eval": _cmd_eval,
         "optimize": _cmd_optimize, "report": _cmd_report,
         "budget": _cmd_budget, "serve": _cmd_serve,
     }

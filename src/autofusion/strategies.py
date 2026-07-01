@@ -284,6 +284,35 @@ class VerifiedBestOfN:
         return finish(oks[0])
 
 
+@dataclass
+class CategoryRouter:
+    """Classify a task by category (regex over the prompt) and dispatch to that
+    category's sub-strategy — a model OR a recipe (bestofMarj for code, opus for
+    reasoning, ...). Passes a held-out verifier through only to sub-strategies
+    that select among candidates."""
+
+    default: object  # a Strategy
+    rules: list[tuple[re.Pattern, object]] = field(default_factory=list)  # (pattern, Strategy)
+    name: str = "auto"
+    needs_verifier: bool = True
+
+    def select(self, messages: list[Message]):
+        text = " ".join(m.get("content", "") for m in messages if m.get("role") == "user")
+        for pattern, strat in self.rules:
+            if pattern.search(text):
+                return strat
+        return self.default
+
+    async def run(
+        self, messages: list[Message], budget: BudgetTracker | None = None,
+        verify=None, **kw,
+    ) -> CompletionResult:
+        sub = self.select(messages)
+        if getattr(sub, "needs_verifier", False):
+            return await sub.run(messages, budget=budget, verify=verify, **kw)
+        return await sub.run(messages, budget=budget, **kw)
+
+
 # Our recipes are branded "*Marj". Old bare names stay as aliases so existing
 # configs/commands keep working.
 _ALIASES = {"fusion": "fusionMarj", "route": "routeMarj",
@@ -336,5 +365,15 @@ def resolve_strategy(config: Config, name: str):
             critic=config.model(b.critic) if b.critic else None,
             temperature=b.temperature,
         )
-    known = ", ".join(sorted(config.models)) + ", fusionMarj, routeMarj, cascadeMarj, bestofMarj"
+    if name == "auto":
+        cats = config.categories
+        if not cats.default:
+            raise ValueError("[categories] config needs a default strategy")
+        forbidden = {"auto"}
+        return CategoryRouter(
+            default=resolve_strategy(config, cats.default),
+            rules=[(re.compile(p, re.IGNORECASE), resolve_strategy(config, s))
+                   for p, s in cats.rules if s not in forbidden],
+        )
+    known = ", ".join(sorted(config.models)) + ", fusionMarj, routeMarj, cascadeMarj, bestofMarj, auto"
     raise KeyError(f"unknown strategy '{name}'. Available: {known}")
