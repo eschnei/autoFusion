@@ -124,6 +124,13 @@ critic = "haiku"
 n = 4
 temperature = 0.7
 
+[delegate]
+# Devin-Fusion delegation for the agentic eval: a strong lead plans/reviews on
+# compact context, a cheap sidekick does the token-heavy editing.
+lead = "opus"
+sidekick = "deepseek"
+max_rounds = 3
+
 [categories]
 # `auto`: classify the task, route to the recipe our data says wins per category.
 default = "opus"                       # reasoning/writing — frontier leads

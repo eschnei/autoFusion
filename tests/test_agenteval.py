@@ -43,6 +43,7 @@ class _Cfg:
     code = SimpleNamespace(models=["bad", "good"])
     bestofn = SimpleNamespace(models=[])
     cascade = SimpleNamespace(tiers=["cheap", "strong"])
+    delegate = SimpleNamespace(lead="lead", sidekick="hands", max_rounds=3)
 
     def model(self, name):
         return ModelSpec(name=name, model=f"ollama/{name}",
@@ -98,6 +99,39 @@ def test_cascade_stops_at_first_passing_tier(monkeypatch):
     o = res[0].outcomes[0]
     assert res[0].n_passed == 1
     assert o.n_calls == 1 and abs(o.cost_usd - 0.01) < 1e-9   # short-circuited
+
+
+def test_parse_explicit_baskets_and_tiers():
+    cfg = _Cfg()
+    bo = agenteval.parse_recipe(cfg, "bestof:2+deepseek+qwen+llama")   # inline basket overrides config
+    assert bo.kind == "bestof" and bo.n == 2
+    assert [s.name for s in bo.specs] == ["deepseek", "qwen", "llama"]
+    ca = agenteval.parse_recipe(cfg, "cascade+haiku+opus")
+    assert ca.kind == "cascade" and [s.name for s in ca.specs] == ["haiku", "opus"]
+    dg = agenteval.parse_recipe(cfg, "delegate:opus+deepseek")
+    assert dg.kind == "delegate" and [s.name for s in dg.specs] == ["opus", "deepseek"]
+    dg2 = agenteval.parse_recipe(cfg, "delegate")                       # falls back to [delegate] config
+    assert [s.name for s in dg2.specs] == ["lead", "hands"]
+
+
+def _fake_lead(plan="Edit mathx.py to fix the operators.", cost=0.005):
+    async def fake(**kwargs):
+        msg = SimpleNamespace(content=plan, tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)],
+                               _hidden_params={"response_cost": cost})
+    return fake
+
+
+def test_delegate_recipe_sums_lead_and_sidekick(monkeypatch):
+    fix = get_suite()[0].fix
+    # sidekick "hands" executes the fix; lead is a mocked planning call.
+    monkeypatch.setattr(agentmod, "run_agent", _fake_agent({"hands": fix}, cost=0.01))
+    monkeypatch.setattr(agentmod.litellm, "acompletion", _fake_lead(cost=0.005))
+    res = asyncio.run(agenteval.run_agent_eval(_Cfg(), ["delegate"], limit=1, max_steps=3))
+    o = res[0].outcomes[0]
+    assert res[0].n_passed == 1
+    assert o.n_calls == 2                                    # 1 lead plan + 1 sidekick loop
+    assert abs(o.cost_usd - 0.015) < 1e-9                    # lead cost + sidekick cost
 
 
 def test_unknown_recipe_is_a_clean_error(monkeypatch):

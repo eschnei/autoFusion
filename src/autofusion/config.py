@@ -141,6 +141,16 @@ class CodeConfig:
 
 
 @dataclass
+class DelegateConfig:
+    """Lead+sidekick delegation: a strong `lead` plans/reviews, a cheap `sidekick`
+    does the mechanical edits (Devin-Fusion pattern — frontier quality, lower cost)."""
+
+    lead: str | None = None
+    sidekick: str | None = None
+    max_rounds: int = 3
+
+
+@dataclass
 class CategoriesConfig:
     """Task-category routing: classify a prompt, dispatch to that category's
     strategy (a model or a recipe name). First matching rule wins, else default."""
@@ -158,6 +168,7 @@ class Config:
     cascade: CascadeConfig = field(default_factory=CascadeConfig)
     bestofn: BestOfNConfig = field(default_factory=BestOfNConfig)
     code: CodeConfig = field(default_factory=CodeConfig)
+    delegate: DelegateConfig = field(default_factory=DelegateConfig)
     categories: CategoriesConfig = field(default_factory=CategoriesConfig)
     path: Path | None = None
 
@@ -246,6 +257,12 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
         n=int(cd.get("n", 4)),
         temperature=float(cd.get("temperature", 0.7)),
     )
+    dg = raw.get("delegate", {})
+    delegate = DelegateConfig(
+        lead=dg.get("lead"),
+        sidekick=dg.get("sidekick"),
+        max_rounds=int(dg.get("max_rounds", 3)),
+    )
     cat = raw.get("categories", {})
     categories = CategoriesConfig(
         default=cat.get("default"),
@@ -254,5 +271,5 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
     )
     return Config(
         models=models, fusion=fusion, budget=budget, router=router, cascade=cascade,
-        bestofn=bestofn, code=code, categories=categories, path=path,
+        bestofn=bestofn, code=code, delegate=delegate, categories=categories, path=path,
     )
