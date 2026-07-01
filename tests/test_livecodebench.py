@@ -41,5 +41,10 @@ def test_known_correct_solution_scores_pass(data_file):
         "    print('YES' if sum(a != b for a, b in zip(s, 'abc')) != 3 else 'NO')\n"
         "```"
     )
-    result = bench.score(tasks["1873_A"], solution)
-    assert result.passed, f"correct solution should pass but: {result.detail}"
+    task = tasks["1873_A"]
+    # Graded on held-out PRIVATE tests:
+    assert bench.score(task, solution).passed, "correct solution should pass private grading"
+    # And the public-test held-out verifier (used for best-of-N selection) agrees:
+    verify = bench.held_out_verifier(task)
+    assert verify(solution) is True
+    assert task.meta["public"] and "private" in task.meta   # both sets loaded
