@@ -52,7 +52,8 @@ def test_resolve_strategy_builds_category_router():
                              output_cost_per_token=0.0) for n in ("opus", "a", "b", "critic")},
         fusion=FusionConfig(), budget=BudgetConfig(), router=RouterConfig(),
         bestofn=BestOfNConfig(models=["a", "b"], critic="critic"),
-        categories=CategoriesConfig(default="opus", rules=[("code|def ", "bestofMarj")]),
+        categories=CategoriesConfig(default="opus", rules=[("code", "code|def ", "bestofMarj")]),
+        path=None,
     )
     r = resolve_strategy(cfg, "auto")
     assert isinstance(r, CategoryRouter)

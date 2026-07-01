@@ -146,7 +146,7 @@ class CategoriesConfig:
     strategy (a model or a recipe name). First matching rule wins, else default."""
 
     default: str | None = None
-    rules: list[tuple[str, str]] = field(default_factory=list)  # (pattern, strategy name)
+    rules: list[tuple[str, str, str]] = field(default_factory=list)  # (category, pattern, strategy)
 
 
 @dataclass
@@ -249,7 +249,8 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
     cat = raw.get("categories", {})
     categories = CategoriesConfig(
         default=cat.get("default"),
-        rules=[(r["match"], r["strategy"]) for r in cat.get("rules", [])],
+        rules=[(r.get("category", r["strategy"]), r["match"], r["strategy"])
+               for r in cat.get("rules", [])],
     )
     return Config(
         models=models, fusion=fusion, budget=budget, router=router, cascade=cascade,

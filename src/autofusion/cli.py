@@ -297,6 +297,50 @@ def _cmd_report(args) -> int:
     return 0
 
 
+def _cmd_learn(args) -> int:
+    from .eval.runner import run_baseline
+    from .optimizer import RecipeOutcome, available_model_names, candidate_recipes
+    from .recipe_cache import load_recipes, save_recipes
+
+    cfg = load_config(args.config)
+    pairs = [p.split("=", 1) for p in args.benchmarks.split(",") if "=" in p]
+    recipes = candidate_recipes(cfg, available_model_names(cfg))
+    cache = load_recipes(cfg)
+    print(f"learning best recipe per category over {len(recipes)} candidates...\n")
+    for category, bench in pairs:
+        results = asyncio.run(
+            run_baseline(cfg, recipes, bench, limit=args.limit, concurrency=args.concurrency)
+        )
+        outs = [RecipeOutcome.from_run(r) for r in results]
+        if not outs:
+            continue
+        best = max(outs, key=lambda o: (o.pass_at_1, -o.avg_cost_usd))  # quality, then cheap
+        cache[category] = {"recipe": best.recipe, "score": round(best.pass_at_1, 4),
+                           "cost": round(best.avg_cost_usd, 6), "benchmark": bench,
+                           "n": args.limit or 0}
+        print(f"  {category:<12} -> {best.recipe}  ({best.pass_at_1:.0%}, "
+              f"${best.avg_cost_usd:.5f}/task on {bench})")
+    path = save_recipes(cfg, cache)
+    print(f"\nlearned recipes written to {path}  (auto now uses them)")
+    return 0
+
+
+def _cmd_recipes(args) -> int:
+    from .recipe_cache import cache_path, load_recipes
+
+    cfg = load_config(args.config)
+    learned = load_recipes(cfg)
+    if not learned:
+        print("no learned recipes yet — run `autofusion learn`.")
+        return 0
+    print(f"{'category':<14}{'recipe':<14}{'score':>7}{'$/task':>10}  benchmark")
+    print("-" * 58)
+    for cat, d in sorted(learned.items()):
+        print(f"{cat:<14}{d['recipe']:<14}{d['score']:>6.0%}{d['cost']:>10.5f}  {d.get('benchmark', '')}")
+    print(f"\n({cache_path(cfg)})")
+    return 0
+
+
 def _cmd_serve(args) -> int:
     import uvicorn
 
@@ -388,6 +432,14 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument("-n", "--limit", type=int, default=None, help="limit tasks per benchmark")
     p_report.add_argument("--concurrency", type=int, default=4)
 
+    p_learn = sub.add_parser("learn", help="measure + cache the best recipe per category")
+    p_learn.add_argument("--benchmarks", default="code=livecodebench,math=gsm8k,reasoning=mmlu-pro",
+                         help="comma-separated category=benchmark pairs")
+    p_learn.add_argument("-n", "--limit", type=int, default=None, help="tasks per benchmark")
+    p_learn.add_argument("--concurrency", type=int, default=4)
+
+    sub.add_parser("recipes", help="show the learned per-category recipes")
+
     args = parser.parse_args(argv)
     handlers = {
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
@@ -395,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
         "bestofn": _cmd_bestofn, "auto": _cmd_auto, "code": _cmd_code, "eval": _cmd_eval,
         "optimize": _cmd_optimize, "report": _cmd_report,
+        "learn": _cmd_learn, "recipes": _cmd_recipes,
         "budget": _cmd_budget, "serve": _cmd_serve,
     }
     try:
