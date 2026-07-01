@@ -141,6 +141,15 @@ class CodeConfig:
 
 
 @dataclass
+class CategoriesConfig:
+    """Task-category routing: classify a prompt, dispatch to that category's
+    strategy (a model or a recipe name). First matching rule wins, else default."""
+
+    default: str | None = None
+    rules: list[tuple[str, str]] = field(default_factory=list)  # (pattern, strategy name)
+
+
+@dataclass
 class Config:
     models: dict[str, ModelSpec]
     fusion: FusionConfig
@@ -149,6 +158,7 @@ class Config:
     cascade: CascadeConfig = field(default_factory=CascadeConfig)
     bestofn: BestOfNConfig = field(default_factory=BestOfNConfig)
     code: CodeConfig = field(default_factory=CodeConfig)
+    categories: CategoriesConfig = field(default_factory=CategoriesConfig)
     path: Path | None = None
 
     def model(self, name: str) -> ModelSpec:
@@ -236,7 +246,12 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
         n=int(cd.get("n", 4)),
         temperature=float(cd.get("temperature", 0.7)),
     )
+    cat = raw.get("categories", {})
+    categories = CategoriesConfig(
+        default=cat.get("default"),
+        rules=[(r["match"], r["strategy"]) for r in cat.get("rules", [])],
+    )
     return Config(
-        models=models, fusion=fusion, budget=budget,
-        router=router, cascade=cascade, bestofn=bestofn, code=code, path=path,
+        models=models, fusion=fusion, budget=budget, router=router, cascade=cascade,
+        bestofn=bestofn, code=code, categories=categories, path=path,
     )
