@@ -117,6 +117,13 @@ n = 4
 critic = "haiku"
 temperature = 0.7
 
+[code]
+# Coding basket for `autofusion code` (verify-in-the-loop). Code-strong models.
+models = ["deepseek", "qwen2.5-coder", "gpt-4o"]
+critic = "haiku"
+n = 4
+temperature = 0.7
+
 [budget]
 # HARD cap — enforced before any call fires. Control real spend with -n.
 per_request_usd = 0.50
