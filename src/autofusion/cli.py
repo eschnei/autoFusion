@@ -11,6 +11,7 @@ Commands:
   code    "task"        write a solution file, verified by your test command (Phase 11)
   agent   "task"        run a coding agent (read/edit/run) in a repo (Phase A)
   eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
+  agenteval --recipes   score agent recipes (single/best-of/cascade) on a local bug-fix suite (Phase C)
   optimize --benchmark  sweep recipes over available models -> quality×cost frontier
   report  --benchmarks  recipes vs all available models across tasks -> scoreboard
   budget  status        show the configured budget caps
@@ -404,6 +405,25 @@ def _cmd_serve(args) -> int:
     return 0
 
 
+def _cmd_agenteval(args) -> int:
+    from .eval.agenteval import run_agent_eval
+    from .eval.results import render_leaderboard, save_run
+
+    cfg = load_config(args.config)
+    budget = BudgetTracker.from_config(cfg.budget)
+    recipes = [r.strip() for r in args.recipes.split(",") if r.strip()]
+    print(f"local agentic eval | recipes: {', '.join(recipes)} | "
+          f"tasks: {args.limit or 'all'} | max-steps: {args.max_steps}")
+    print("  (each recipe fixes a suite of local bugs; the repo's tests are the verifier)\n")
+    results = asyncio.run(run_agent_eval(
+        cfg, recipes, limit=args.limit, budget=budget,
+        max_steps=args.max_steps, concurrency=args.concurrency))
+    print(render_leaderboard(results))
+    path = save_run(results)
+    print(f"\nsaved: {path}")
+    return 0
+
+
 def _cmd_eval(args) -> int:
     from .eval.results import render_leaderboard, save_run
     from .eval.runner import run_baseline
@@ -500,13 +520,20 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("recipes", help="show the learned per-category recipes")
 
+    p_ae = sub.add_parser("agenteval", help="score agent recipes on a local bug-fix suite")
+    p_ae.add_argument("--recipes", default="single:deepseek,bestof:3,cascade",
+                      help="comma-separated: single:<model>, bestof:<N>, cascade")
+    p_ae.add_argument("-n", "--limit", type=int, default=None, help="limit number of tasks")
+    p_ae.add_argument("--max-steps", type=int, default=15)
+    p_ae.add_argument("--concurrency", type=int, default=4)
+
     args = parser.parse_args(argv)
     handlers = {
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
         "bestofn": _cmd_bestofn, "auto": _cmd_auto, "code": _cmd_code, "agent": _cmd_agent,
-        "eval": _cmd_eval,
+        "eval": _cmd_eval, "agenteval": _cmd_agenteval,
         "optimize": _cmd_optimize, "report": _cmd_report,
         "learn": _cmd_learn, "recipes": _cmd_recipes,
         "budget": _cmd_budget, "serve": _cmd_serve,
