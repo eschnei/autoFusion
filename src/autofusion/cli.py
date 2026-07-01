@@ -8,6 +8,7 @@ Commands:
   route   "prompt"      run the router (picks one model) on one prompt (Phase 6)
   cascade "prompt"      cheap->critic->escalate cost cascade on one prompt (Phase 7)
   bestofn "prompt"      sample N candidates, a verifier/critic picks the best (Phase 9)
+  code    "task"        write a solution file, verified by your test command (Phase 11)
   eval    --models a,b  run a benchmark baseline / fusion / route / cascade -> leaderboard
   optimize --benchmark  sweep recipes over available models -> quality×cost frontier
   report  --benchmarks  recipes vs all available models across tasks -> scoreboard
@@ -201,6 +202,46 @@ def _cmd_bestofn(args) -> int:
     return 0
 
 
+def _cmd_code(args) -> int:
+    from pathlib import Path
+
+    from .coding import build_task_messages, build_verifier
+    from .eval.benchmarks import extract_code
+    from .strategies import VerifiedBestOfN
+
+    cfg = load_config(args.config)
+    names = cfg.code.models or cfg.bestofn.models
+    if not names:
+        print("error: no coding basket — set [code].models or [bestofn].models", file=sys.stderr)
+        return 2
+    critic_name = cfg.code.critic or cfg.bestofn.critic
+    strategy = VerifiedBestOfN(
+        models=[cfg.model(m) for m in names],
+        n=args.n or cfg.code.n,
+        critic=cfg.model(critic_name) if critic_name else None,
+        temperature=cfg.code.temperature,
+    )
+    budget = BudgetTracker.from_config(cfg.budget)
+    verify = build_verifier(args.file, args.tests, args.timeout)
+    print(f"-> code | basket: {', '.join(names)} | n={strategy.n} | target: {args.file}"
+          + (f" | tests: {args.tests}" if args.tests else " | (no tests — critic picks)")
+          + "\n  (writes model code to the target file and runs your test command)\n")
+    messages = build_task_messages(args.task, args.file, args.context)
+    try:
+        result = asyncio.run(strategy.run(messages, budget=budget, verify=verify))
+    except BudgetExceeded as exc:
+        print(f"budget cap hit: {exc}", file=sys.stderr)
+        return 2
+    if not result.ok:
+        print(f"ERROR: {result.error}", file=sys.stderr)
+        return 1
+    Path(args.file).write_text(extract_code(result.text))
+    passed = verify(result.text) if verify else None
+    verdict = "TESTS PASS ✓" if passed else ("TESTS FAIL ✗ (best candidate written)" if verify else "written (unverified)")
+    print(f"wrote {args.file}  |  {result.n_calls} candidates  |  ${result.cost_usd:.4f}  |  {verdict}")
+    return 0 if (passed or not verify) else 1
+
+
 def _cmd_optimize(args) -> int:
     from .eval.runner import run_baseline
     from .optimizer import (
@@ -291,6 +332,14 @@ def main(argv: list[str] | None = None) -> int:
     p_bestofn = sub.add_parser("bestofn", help="sample N candidates, pick the best")
     p_bestofn.add_argument("prompt", help="the prompt to sample")
 
+    p_code = sub.add_parser("code", help="write a verified solution file")
+    p_code.add_argument("task", help="what to build")
+    p_code.add_argument("-f", "--file", default="solution.py", help="target file to write")
+    p_code.add_argument("-t", "--tests", default="", help="test command (returncode 0 = pass)")
+    p_code.add_argument("--context", nargs="*", default=[], help="context files to include")
+    p_code.add_argument("-n", type=int, default=0, help="candidates (0 = config default)")
+    p_code.add_argument("--timeout", type=float, default=60.0, help="per-test-run timeout (s)")
+
     p_budget = sub.add_parser("budget", help="budget caps")
     p_budget.add_argument("action", choices=["status"], help="what to show")
 
@@ -322,8 +371,9 @@ def main(argv: list[str] | None = None) -> int:
         "init": _cmd_init, "config-check": _cmd_config_check, "registry": _cmd_registry,
         "smoke": _cmd_smoke,
         "fuse": _cmd_fuse, "route": _cmd_route, "cascade": _cmd_cascade,
-        "bestofn": _cmd_bestofn, "eval": _cmd_eval, "optimize": _cmd_optimize,
-        "report": _cmd_report, "budget": _cmd_budget, "serve": _cmd_serve,
+        "bestofn": _cmd_bestofn, "code": _cmd_code, "eval": _cmd_eval,
+        "optimize": _cmd_optimize, "report": _cmd_report,
+        "budget": _cmd_budget, "serve": _cmd_serve,
     }
     try:
         return handlers[args.command](args)

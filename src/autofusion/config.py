@@ -131,6 +131,16 @@ class BestOfNConfig:
 
 
 @dataclass
+class CodeConfig:
+    """The coding basket for the `code` verify-in-the-loop command."""
+
+    models: list[str] = field(default_factory=list)  # falls back to [bestofn] if empty
+    critic: str | None = None
+    n: int = 4
+    temperature: float = 0.7
+
+
+@dataclass
 class Config:
     models: dict[str, ModelSpec]
     fusion: FusionConfig
@@ -138,6 +148,7 @@ class Config:
     router: RouterConfig = field(default_factory=RouterConfig)
     cascade: CascadeConfig = field(default_factory=CascadeConfig)
     bestofn: BestOfNConfig = field(default_factory=BestOfNConfig)
+    code: CodeConfig = field(default_factory=CodeConfig)
     path: Path | None = None
 
     def model(self, name: str) -> ModelSpec:
@@ -218,7 +229,14 @@ def load_config(explicit: str | os.PathLike | None = None) -> Config:
         critic=bo.get("critic"),
         temperature=float(bo.get("temperature", 0.7)),
     )
+    cd = raw.get("code", {})
+    code = CodeConfig(
+        models=list(cd.get("models", [])),
+        critic=cd.get("critic"),
+        n=int(cd.get("n", 4)),
+        temperature=float(cd.get("temperature", 0.7)),
+    )
     return Config(
         models=models, fusion=fusion, budget=budget,
-        router=router, cascade=cascade, bestofn=bestofn, path=path,
+        router=router, cascade=cascade, bestofn=bestofn, code=code, path=path,
     )
