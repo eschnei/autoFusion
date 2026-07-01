@@ -204,16 +204,42 @@ def _cmd_bestofn(args) -> int:
 
 
 def _cmd_agent(args) -> int:
-    from .agent import Workspace, run_agent
+    from .agent import Workspace, best_of_n_agents, run_agent
 
     cfg = load_config(args.config)
+    budget = BudgetTracker.from_config(cfg.budget)
+
+    if args.best_of > 1:  # Phase B — best-of-N trajectories, verified by tests
+        if not args.tests:
+            print("error: --best-of needs --tests (the verifier that picks the winner)",
+                  file=sys.stderr)
+            return 2
+        names = cfg.code.models or cfg.bestofn.models
+        if not names:
+            print("error: no coding basket — set [code].models or [bestofn].models", file=sys.stderr)
+            return 2
+        ws = Workspace(args.repo)
+        print(f"-> agent best-of-{args.best_of} | basket: {', '.join(names)} | repo: {ws.root} "
+              f"| verify: {args.tests}\n  (N isolated trajectories; the repo's tests pick the winner)\n")
+        res = asyncio.run(best_of_n_agents(
+            [cfg.model(m) for m in names], args.task, ws.root, args.tests, args.best_of,
+            budget=budget, max_steps=args.max_steps))
+        for t in res.trajectories:
+            mark = "PASS ✓" if t.passed else "fail  "
+            print(f"  {t.model:<16}{mark}  ({t.result.steps} steps, ${t.result.cost_usd:.4f})")
+        if res.winner:
+            print(f"\napplied winner: {res.winner.model}  |  tests PASS ✓  |  total ${res.total_cost:.4f}")
+        else:
+            print(f"\nno trajectory passed — repo unchanged  |  total ${res.total_cost:.4f}")
+        return 0 if res.winner else 1
+
+    # Phase A — single agent
     model_name = args.model or cfg.categories.default
     if not model_name:
         print("error: pass --model (or set [categories].default)", file=sys.stderr)
         return 2
     spec = cfg.model(model_name)
     ws = Workspace(args.repo)
-    budget = BudgetTracker.from_config(cfg.budget)
     print(f"-> agent | model: {spec.name} | repo: {ws.root} | max-steps: {args.max_steps}")
     print("  (the agent reads/edits files and runs commands in the repo)\n")
     result = asyncio.run(run_agent(spec, args.task, ws, budget=budget, max_steps=args.max_steps))
@@ -429,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
     p_agent.add_argument("-r", "--repo", default=".", help="repo/workspace directory")
     p_agent.add_argument("-m", "--model", default="", help="agent model (default: [categories].default)")
     p_agent.add_argument("-t", "--tests", default="", help="test command to verify at the end")
+    p_agent.add_argument("--best-of", type=int, default=1, help="N trajectories; tests pick the winner")
     p_agent.add_argument("--max-steps", type=int, default=20)
 
     p_code = sub.add_parser("code", help="write a verified solution file")

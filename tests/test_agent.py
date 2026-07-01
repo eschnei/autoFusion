@@ -83,3 +83,47 @@ def test_loop_stops_at_max_steps(tmp_path, monkeypatch):
 
 async def _async_return(v):
     return v
+
+
+# ---- Phase B: best-of-N trajectories ----
+
+def _named(name):
+    return ModelSpec(name=name, model=f"ollama/{name}", input_cost_per_token=0.0, output_cost_per_token=0.0)
+
+
+def _repo_with_failing_test(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sol.py").write_text("def f():\n    return 0\n")
+    (repo / "t.py").write_text("import sol\nassert sol.f() == 1\n")
+    return repo
+
+
+def test_best_of_applies_passing_winner(tmp_path, monkeypatch):
+    repo = _repo_with_failing_test(tmp_path)
+
+    async def fake_run_agent(spec, task, ws, **kw):  # 'good' writes the fix; others don't
+        ws.write_file("sol.py", "def f():\n    return 1\n" if spec.name == "good"
+                      else "def f():\n    return 9\n")
+        return agentmod.AgentResult("done", 0.01, 1, 1, True)
+
+    monkeypatch.setattr(agentmod, "run_agent", fake_run_agent)
+    res = asyncio.run(agentmod.best_of_n_agents(
+        [_named("bad"), _named("good")], "fix f", str(repo), "python t.py", 2, max_steps=5))
+    assert res.winner is not None and res.winner.model == "good"
+    assert "return 1" in (repo / "sol.py").read_text()      # winner applied to the real repo
+    assert abs(res.total_cost - 0.02) < 1e-9                 # cost summed across trajectories
+
+
+def test_best_of_none_pass_leaves_repo_unchanged(tmp_path, monkeypatch):
+    repo = _repo_with_failing_test(tmp_path)
+
+    async def fake_run_agent(spec, task, ws, **kw):
+        ws.write_file("sol.py", "def f():\n    return 9\n")   # everyone fails
+        return agentmod.AgentResult("done", 0.01, 1, 1, True)
+
+    monkeypatch.setattr(agentmod, "run_agent", fake_run_agent)
+    res = asyncio.run(agentmod.best_of_n_agents(
+        [_named("a"), _named("b")], "fix f", str(repo), "python t.py", 2, max_steps=5))
+    assert res.winner is None
+    assert "return 0" in (repo / "sol.py").read_text()       # untouched

@@ -12,8 +12,11 @@ disposable checkout or a container. A hardened sandbox is a later phase.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -172,9 +175,70 @@ async def run_agent(
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": "finished"})
                 finished = True
                 break
-            result = execute_tool(workspace, tc.function.name, _parse_args(tc.function.arguments))
+            # Offload the (blocking) tool call so N parallel trajectories don't
+            # serialize on each other's subprocess/file I/O.
+            result = await asyncio.to_thread(
+                execute_tool, workspace, tc.function.name, _parse_args(tc.function.arguments)
+            )
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)[:3500]})
         if finished:
             return AgentResult(summary, total_cost, step, n_calls, True)
 
     return AgentResult(summary or "max steps reached", total_cost, max_steps, n_calls, finished)
+
+
+# --------------------------------------------------------------------------- #
+# Phase B — best-of-N trajectories
+# --------------------------------------------------------------------------- #
+
+_COPY_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".autofusion")
+
+
+@dataclass
+class Trajectory:
+    model: str
+    workspace: str  # temp dir this trajectory ran in
+    result: AgentResult
+    passed: bool
+
+
+@dataclass
+class BestOfResult:
+    trajectories: list[Trajectory]
+    winner: Trajectory | None
+    total_cost: float
+
+
+async def _run_trajectory(
+    spec: ModelSpec, task: str, src_repo: Path, tests_cmd: str,
+    budget: BudgetTracker | None, max_steps: int,
+) -> Trajectory:
+    tmp = Path(tempfile.mkdtemp(prefix="af-traj-"))
+    shutil.copytree(src_repo, tmp, dirs_exist_ok=True, ignore=_COPY_IGNORE)
+    ws = Workspace(tmp)
+    result = await run_agent(spec, task, ws, budget=budget, max_steps=max_steps)
+    passed = (await asyncio.to_thread(ws.run, tests_cmd)).startswith("exit 0")
+    return Trajectory(model=spec.name, workspace=str(tmp), result=result, passed=passed)
+
+
+async def best_of_n_agents(
+    basket: list[ModelSpec], task: str, repo: str | Path, tests_cmd: str, n: int, *,
+    budget: BudgetTracker | None = None, max_steps: int = 20,
+) -> BestOfResult:
+    """Run N agent trajectories (cycling the basket for diversity) in isolated repo
+    copies, verify each with `tests_cmd`, and apply the first passing one back to
+    the repo. The repo's tests are the verifier — best-of-N lifted to trajectories."""
+    repo = Path(repo).resolve()
+    trajectories = await asyncio.gather(*[
+        _run_trajectory(basket[i % len(basket)], task, repo, tests_cmd, budget, max_steps)
+        for i in range(n)
+    ])
+    winner = next((t for t in trajectories if t.passed), None)
+    try:
+        if winner:  # apply the winning trajectory's files back over the repo
+            shutil.copytree(winner.workspace, repo, dirs_exist_ok=True, ignore=_COPY_IGNORE)
+    finally:
+        for t in trajectories:
+            shutil.rmtree(t.workspace, ignore_errors=True)
+    total = sum(t.result.cost_usd for t in trajectories)
+    return BestOfResult(trajectories=list(trajectories), winner=winner, total_cost=total)
