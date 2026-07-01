@@ -24,6 +24,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -163,7 +164,7 @@ def grade(
     """Invoke the official swebench Docker harness. Requires `pip install swebench` +
     a running Docker daemon. Writes a `<model>.<run_id>.json` report in the cwd."""
     cmd = [
-        "python", "-m", "swebench.harness.run_evaluation",
+        sys.executable, "-m", "swebench.harness.run_evaluation",
         "--dataset_name", dataset, "--predictions_path", str(predictions_path),
         "--run_id", run_id, "--max_workers", str(max_workers),
     ]
