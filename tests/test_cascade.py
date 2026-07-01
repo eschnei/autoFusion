@@ -77,7 +77,7 @@ def test_resolve_strategy_builds_cascade_with_fusion_tier():
     )
     c = resolve_strategy(cfg, "cascade")
     assert isinstance(c, Cascade)
-    assert [t.name for t in c.tiers] == ["a", "fusion"]      # a tier can be fusion
+    assert [t.name for t in c.tiers] == ["a", "fusionMarj"]  # a tier can be fusion
     assert c.critic.name == "critic" and c.threshold == 0.6
 
 

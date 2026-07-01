@@ -79,7 +79,7 @@ class Fusion:
     proposers: list[ModelSpec]
     aggregator: ModelSpec
     layers: int = 1
-    name: str = "fusion"
+    name: str = "fusionMarj"
     # Sampling temperature for proposers. None inherits the call's temperature.
     # Set > 0 to get diverse drafts — required for Self-MoA (same model repeated).
     proposer_temperature: float | None = None
@@ -134,7 +134,7 @@ class Router:
 
     default: ModelSpec
     rules: list[tuple[re.Pattern, ModelSpec]] = field(default_factory=list)
-    name: str = "route"
+    name: str = "routeMarj"
 
     def select(self, messages: list[Message]) -> ModelSpec:
         text = " ".join(m.get("content", "") for m in messages if m.get("role") == "user")
@@ -187,7 +187,7 @@ class Cascade:
     tiers: list  # Strategy objects, cheapest -> most expensive
     critic: ModelSpec
     threshold: float = 0.7
-    name: str = "cascade"
+    name: str = "cascadeMarj"
 
     async def run(
         self, messages: list[Message], budget: BudgetTracker | None = None, **kw
@@ -233,7 +233,7 @@ class VerifiedBestOfN:
     n: int = 4
     critic: ModelSpec | None = None
     temperature: float = 0.7
-    name: str = "bestofn"
+    name: str = "bestofMarj"
     needs_verifier: bool = True  # signals the runner to pass a verify() closure
 
     async def run(
@@ -284,12 +284,21 @@ class VerifiedBestOfN:
         return finish(oks[0])
 
 
+# Our recipes are branded "*Marj". Old bare names stay as aliases so existing
+# configs/commands keep working.
+_ALIASES = {"fusion": "fusionMarj", "route": "routeMarj",
+            "cascade": "cascadeMarj", "bestofn": "bestofMarj"}
+
+
 def resolve_strategy(config: Config, name: str):
     """Map a CLI name to a Strategy. A configured model -> SingleModel;
-    "fusion" -> Fusion from [fusion]; "route" -> Router from [router]."""
+    "fusionMarj" -> Fusion from [fusion]; "routeMarj" -> Router from [router];
+    "cascadeMarj" -> Cascade; "bestofMarj" -> VerifiedBestOfN. Bare legacy names
+    (fusion/route/cascade/bestofn) resolve as aliases."""
     if name in config.models:
         return SingleModel(config.model(name))
-    if name == "fusion":
+    name = _ALIASES.get(name, name)
+    if name == "fusionMarj":
         f = config.fusion
         if not f.proposers or not f.aggregator:
             raise ValueError("[fusion] config needs both proposers and an aggregator")
@@ -298,7 +307,7 @@ def resolve_strategy(config: Config, name: str):
             aggregator=config.model(f.aggregator),
             layers=f.layers,
         )
-    if name == "route":
+    if name == "routeMarj":
         r = config.router
         if not r.default:
             raise ValueError("[router] config needs a default model")
@@ -306,18 +315,18 @@ def resolve_strategy(config: Config, name: str):
             default=config.model(r.default),
             rules=[(re.compile(p, re.IGNORECASE), config.model(m)) for p, m in r.rules],
         )
-    if name == "cascade":
+    if name == "cascadeMarj":
         c = config.cascade
         if len(c.tiers) < 2 or not c.critic:
             raise ValueError("[cascade] config needs >=2 tiers and a critic model")
-        if "cascade" in c.tiers:
-            raise ValueError("[cascade] tiers cannot include 'cascade'")
+        if {"cascade", "cascadeMarj"} & set(c.tiers):
+            raise ValueError("[cascade] tiers cannot include the cascade itself")
         return Cascade(
             tiers=[resolve_strategy(config, t) for t in c.tiers],
             critic=config.model(c.critic),
             threshold=c.threshold,
         )
-    if name == "bestofn":
+    if name == "bestofMarj":
         b = config.bestofn
         if not b.models:
             raise ValueError("[bestofn] config needs at least one model")
@@ -327,5 +336,5 @@ def resolve_strategy(config: Config, name: str):
             critic=config.model(b.critic) if b.critic else None,
             temperature=b.temperature,
         )
-    known = ", ".join(sorted(config.models)) + ", fusion, route, cascade, bestofn"
+    known = ", ".join(sorted(config.models)) + ", fusionMarj, routeMarj, cascadeMarj, bestofMarj"
     raise KeyError(f"unknown strategy '{name}'. Available: {known}")

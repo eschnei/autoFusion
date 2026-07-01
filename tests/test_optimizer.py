@@ -47,7 +47,7 @@ def test_fusion_recipe_appears_when_all_models_available(monkeypatch):
     cfg = _config()
     available = available_model_names(cfg)
     assert set(available) == {"local", "gpt"}
-    assert "fusion" in candidate_recipes(cfg, available)
+    assert "fusionMarj" in candidate_recipes(cfg, available)
 
 
 def _outcome(name, q, cost):
