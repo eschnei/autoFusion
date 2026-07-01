@@ -26,3 +26,6 @@ results/
 scripts/autodev/
 presentation/
 .autofusion/
+logs/
+autofusion.*.json
+swebench_preds.jsonl
